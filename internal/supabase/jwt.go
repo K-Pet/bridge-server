@@ -2,18 +2,36 @@ package supabase
 
 import (
 	"fmt"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
-// VerifyJWT validates a Supabase JWT and returns the user ID.
-// TODO: implement with your Supabase JWT secret or JWKS endpoint.
-func VerifyJWT(tokenString string, supabaseURL string) (userID string, err error) {
-	// Implementation will use a JWT library (e.g., golang-jwt/jwt/v5)
-	// to verify the token against your Supabase project's JWT secret.
-	//
-	// Steps:
-	// 1. Parse and validate the JWT signature
-	// 2. Check expiration (exp claim)
-	// 3. Verify issuer matches supabaseURL + "/auth/v1"
-	// 4. Extract and return the "sub" claim as userID
-	return "", fmt.Errorf("not implemented")
+// VerifyJWT validates a Supabase JWT and returns the user ID (sub claim).
+// The jwtSecret is the Supabase project's JWT secret (HMAC-SHA256 signing key).
+func VerifyJWT(tokenString string, jwtSecret string) (userID string, err error) {
+	if jwtSecret == "" {
+		return "", fmt.Errorf("JWT secret not configured")
+	}
+
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(jwtSecret), nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("invalid token: %w", err)
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return "", fmt.Errorf("invalid claims")
+	}
+
+	sub, ok := claims["sub"].(string)
+	if !ok || sub == "" {
+		return "", fmt.Errorf("missing sub claim")
+	}
+
+	return sub, nil
 }

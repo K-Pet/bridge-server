@@ -32,3 +32,25 @@ export async function getPurchases() {
 export async function getSettings() {
   return apiFetch<{ delivery_mode: string; poll_interval: string }>('/api/settings')
 }
+
+export interface PurchaseResult {
+  purchase_id: string
+  status: string
+  delivery_error: string
+}
+
+export async function purchaseAlbum(albumId: string) {
+  return apiFetch<PurchaseResult>('/api/marketplace/purchase', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ album_id: albumId }),
+  })
+}
+
+export async function purchaseTrack(trackId: string) {
+  return apiFetch<PurchaseResult>('/api/marketplace/purchase', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ track_id: trackId }),
+  })
+}

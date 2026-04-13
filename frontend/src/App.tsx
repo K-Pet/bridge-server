@@ -10,6 +10,7 @@ import ArtistDetail from './pages/ArtistDetail'
 import AlbumDetail from './pages/AlbumDetail'
 import Playlists from './pages/Playlists'
 import PlaylistDetail from './pages/PlaylistDetail'
+import Marketplace from './pages/Marketplace'
 import Purchases from './pages/Purchases'
 import Settings from './pages/Settings'
 
@@ -67,6 +68,7 @@ export default function App() {
           <Route path="/album/:id" element={<AlbumDetail />} />
           <Route path="/playlists" element={<Playlists />} />
           <Route path="/playlist/:id" element={<PlaylistDetail />} />
+          <Route path="/marketplace" element={<Marketplace />} />
           <Route path="/purchases" element={<Purchases />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />

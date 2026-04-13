@@ -13,7 +13,7 @@ type contextKey string
 const userIDKey contextKey = "user_id"
 
 // Middleware extracts and verifies the Supabase JWT from the Authorization header.
-func Middleware(supabaseURL string) func(http.Handler) http.Handler {
+func Middleware(jwtSecret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			auth := r.Header.Get("Authorization")
@@ -23,7 +23,7 @@ func Middleware(supabaseURL string) func(http.Handler) http.Handler {
 			}
 			token := strings.TrimPrefix(auth, "Bearer ")
 
-			userID, err := supabase.VerifyJWT(token, supabaseURL)
+			userID, err := supabase.VerifyJWT(token, jwtSecret)
 			if err != nil {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
@@ -35,11 +35,23 @@ func Middleware(supabaseURL string) func(http.Handler) http.Handler {
 	}
 }
 
-// DevMiddleware bypasses auth and injects a fixed dev user ID.
-func DevMiddleware() func(http.Handler) http.Handler {
+// DevMiddleware tries real JWT auth if a Bearer token is provided, otherwise
+// falls back to a fixed "dev-user" identity for unauthenticated requests.
+func DevMiddleware(jwtSecret ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := context.WithValue(r.Context(), userIDKey, "dev-user")
+			userID := "dev-user"
+
+			// Try to extract real user ID from JWT if present
+			auth := r.Header.Get("Authorization")
+			if strings.HasPrefix(auth, "Bearer ") && len(jwtSecret) > 0 && jwtSecret[0] != "" {
+				token := strings.TrimPrefix(auth, "Bearer ")
+				if uid, err := supabase.VerifyJWT(token, jwtSecret[0]); err == nil {
+					userID = uid
+				}
+			}
+
+			ctx := context.WithValue(r.Context(), userIDKey, userID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

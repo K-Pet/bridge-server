@@ -29,14 +29,15 @@ func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue) htt
 
 	// Authenticated Bridge API routes
 	authed := http.NewServeMux()
-	authed.HandleFunc("GET /api/purchases", handlePurchases(queue))
+	authed.HandleFunc("GET /api/purchases", handlePurchases(cfg))
 	authed.HandleFunc("GET /api/settings", handleGetSettings(cfg))
+	authed.HandleFunc("POST /api/marketplace/purchase", handleMarketplacePurchase(cfg))
 
 	var authMiddleware func(http.Handler) http.Handler
 	if cfg.DevMode {
-		authMiddleware = auth.DevMiddleware()
+		authMiddleware = auth.DevMiddleware(cfg.SupabaseJWTSecret)
 	} else {
-		authMiddleware = auth.Middleware(cfg.SupabaseURL)
+		authMiddleware = auth.Middleware(cfg.SupabaseJWTSecret)
 	}
 	mux.Handle("/api/", authMiddleware(authed))
 

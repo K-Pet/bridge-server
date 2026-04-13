@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bridgemusic/bridge-server/internal/config"
@@ -57,16 +58,23 @@ func (c *Client) FetchPendingPurchases(ctx context.Context, serverID string) ([]
 func (c *Client) MarkDelivered(ctx context.Context, purchaseID string) error {
 	url := fmt.Sprintf("%s/rest/v1/purchases?id=eq.%s", c.cfg.SupabaseURL, purchaseID)
 
-	body := `{"status":"delivered"}`
-	req, err := http.NewRequestWithContext(ctx, "PATCH", url, nil)
+	body := strings.NewReader(`{"status":"delivered"}`)
+	req, err := http.NewRequestWithContext(ctx, "PATCH", url, body)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("apikey", c.cfg.SupabaseServiceKey)
 	req.Header.Set("Authorization", "Bearer "+c.cfg.SupabaseServiceKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Body = http.NoBody
-	_ = body // TODO: set body properly with strings.NewReader
 
-	return fmt.Errorf("not fully implemented")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase PATCH failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("supabase returned status %d", resp.StatusCode)
+	}
+	return nil
 }

@@ -16,6 +16,7 @@ type Config struct {
 	SupabaseURL        string
 	SupabaseAnonKey    string
 	SupabaseServiceKey string
+	SupabaseJWTSecret  string
 	WebhookSecret      string
 
 	DeliveryMode string
@@ -42,6 +43,7 @@ func Load() (*Config, error) {
 		SupabaseURL:        envStr("BRIDGE_SUPABASE_URL", ""),
 		SupabaseAnonKey:    envStr("BRIDGE_SUPABASE_ANON_KEY", ""),
 		SupabaseServiceKey: envStr("BRIDGE_SUPABASE_SERVICE_KEY", ""),
+		SupabaseJWTSecret:  envStr("BRIDGE_SUPABASE_JWT_SECRET", ""),
 		WebhookSecret:      envStr("BRIDGE_WEBHOOK_SECRET", ""),
 	}
 

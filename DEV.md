@@ -4,12 +4,14 @@
 
 - [Go 1.23+](https://go.dev/dl/)
 - [Node.js 20+](https://nodejs.org/)
-- [Docker](https://docs.docker.com/get-docker/) (for Navidrome)
+- [Docker](https://docs.docker.com/get-docker/) (for Navidrome + Supabase)
+- [Supabase CLI](https://supabase.com/docs/guides/cli) — local Supabase instance
 - [Tilt](https://docs.tilt.dev/install.html) — orchestrates all services with live reload
 
-Install Tilt on macOS:
+Install on macOS:
 
 ```bash
+brew install supabase/tap/supabase
 curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash
 ```
 
@@ -22,14 +24,23 @@ cd frontend && npm install && cd ..
 # 2. Create local data directories
 mkdir -p data/music data/navidrome data/bridge
 
-# 3. Start everything
+# 3. Start local Supabase (auth, DB, storage)
+supabase start --exclude logflare,vector
+
+# 4. Seed the marketplace (first time only — creates catalog, test user, uploads audio)
+supabase db reset
+./supabase/seed.sh
+
+# 5. Start everything
 tilt up
 ```
 
-This launches three services:
+This launches four services:
 
 | Service | URL | What it does |
 |---------|-----|-------------|
+| **Supabase** | `http://localhost:54321` | Auth, DB, Storage (run separately) |
+| **Supabase Studio** | `http://localhost:54323` | Database admin UI |
 | **Navidrome** | `http://localhost:4533` | Music engine (Docker) |
 | **Bridge Server** | `http://localhost:8080` | Go API backend |
 | **Frontend** | `http://localhost:5173` | React dev server with HMR |
@@ -116,16 +127,17 @@ frontend/
 └── index.html
 ```
 
-### Connecting to Supabase (optional for frontend dev)
+### Local Supabase for Auth + Marketplace
 
-For auth to work in the browser, create `frontend/.env.local`:
+The local Supabase instance handles auth, the marketplace catalog, and purchase storage.
+Credentials are loaded from `.env.local` (gitignored) and injected by the Tiltfile.
 
-```
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJ...
-```
+Test login credentials (created by `./supabase/seed.sh`):
+- **Email:** `test@bridge.music`
+- **Password:** `testpass123`
 
-Without this, the login screen appears but auth calls won't succeed. The Go backend in dev mode bypasses auth, so you can still test API calls directly via `curl` or modify the frontend to skip the login screen during development.
+The Go backend's `/api/config` endpoint serves the Supabase URL + anon key to the frontend
+at runtime, so the frontend connects to local Supabase automatically.
 
 ### Building for Production
 
