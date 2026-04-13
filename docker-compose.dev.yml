@@ -1,0 +1,16 @@
+# Dev-only: runs just Navidrome in Docker.
+# The Go backend and Vite dev server run on the host via Tilt.
+services:
+  navidrome:
+    image: deluan/navidrome:0.61.1
+    ports:
+      - "4533:4533"
+    volumes:
+      - ./data/music:/music
+      - ./data/navidrome:/data
+    environment:
+      ND_MUSICFOLDER: /music
+      ND_DATAFOLDER: /data
+      ND_LOGLEVEL: info
+      ND_SCANSCHEDULE: "@every 1m"
+    restart: unless-stopped

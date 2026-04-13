@@ -1,7 +1,6 @@
 package api
 
 import (
-	"embed"
 	"io/fs"
 	"net/http"
 
@@ -9,10 +8,8 @@ import (
 	"github.com/bridgemusic/bridge-server/internal/config"
 	"github.com/bridgemusic/bridge-server/internal/navidrome"
 	"github.com/bridgemusic/bridge-server/internal/store"
+	"github.com/bridgemusic/bridge-server/web"
 )
-
-//go:embed all:../../web/dist
-var frontendFS embed.FS
 
 func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue) http.Handler {
 	mux := http.NewServeMux()
@@ -23,6 +20,10 @@ func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue) htt
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// Client config — serves Supabase URL + anon key so the frontend can
+	// initialise auth at runtime without baking credentials into the JS build.
+	mux.HandleFunc("GET /api/config", handleConfig(cfg))
+
 	// Webhook endpoint (authenticated via signature, not JWT)
 	mux.Handle("POST /api/webhook/purchase", &webhookHandler{cfg: cfg, queue: queue})
 
@@ -30,15 +31,24 @@ func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue) htt
 	authed := http.NewServeMux()
 	authed.HandleFunc("GET /api/purchases", handlePurchases(queue))
 	authed.HandleFunc("GET /api/settings", handleGetSettings(cfg))
-	mux.Handle("/api/", auth.Middleware(cfg.SupabaseURL)(authed))
+
+	var authMiddleware func(http.Handler) http.Handler
+	if cfg.DevMode {
+		authMiddleware = auth.DevMiddleware()
+	} else {
+		authMiddleware = auth.Middleware(cfg.SupabaseURL)
+	}
+	mux.Handle("/api/", authMiddleware(authed))
 
 	// Reverse proxy to Navidrome (with credential injection)
-	ndProxy := nd.ProxyHandler(cfg)
-	mux.Handle("/rest/", ndProxy)
-	mux.Handle("/nd/", http.StripPrefix("/nd", ndProxy))
+	if nd != nil {
+		ndProxy := nd.ProxyHandler(cfg)
+		mux.Handle("/rest/", ndProxy)
+		mux.Handle("/nd/", http.StripPrefix("/nd", ndProxy))
+	}
 
 	// Frontend SPA — serve static files, fallback to index.html for client-side routing
-	frontendDist, _ := fs.Sub(frontendFS, "web/dist")
+	frontendDist, _ := fs.Sub(web.DistFS, "dist")
 	mux.Handle("/", spaHandler(http.FileServerFS(frontendDist)))
 
 	return mux

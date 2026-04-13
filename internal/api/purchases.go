@@ -16,6 +16,17 @@ func handlePurchases(queue *store.Queue) http.HandlerFunc {
 	}
 }
 
+func handleConfig(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"supabase_url":      cfg.SupabaseURL,
+			"supabase_anon_key": cfg.SupabaseAnonKey,
+			"dev_mode":          cfg.DevMode,
+		})
+	}
+}
+
 func handleGetSettings(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

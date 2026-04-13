@@ -22,6 +22,10 @@ type Config struct {
 	PollInterval time.Duration
 
 	MasterSecret string
+
+	// DevMode disables Supabase auth requirements for local development.
+	// Set BRIDGE_DEV=true to enable.
+	DevMode bool
 }
 
 func Load() (*Config, error) {
@@ -33,6 +37,7 @@ func Load() (*Config, error) {
 		DeliveryMode: envStr("BRIDGE_DELIVERY_MODE", "poll"),
 		PollInterval: envDuration("BRIDGE_POLL_INTERVAL", 5*time.Minute),
 		MasterSecret: envStr("BRIDGE_SECRET", ""),
+		DevMode:      envStr("BRIDGE_DEV", "") == "true",
 
 		SupabaseURL:        envStr("BRIDGE_SUPABASE_URL", ""),
 		SupabaseAnonKey:    envStr("BRIDGE_SUPABASE_ANON_KEY", ""),
@@ -40,11 +45,13 @@ func Load() (*Config, error) {
 		WebhookSecret:      envStr("BRIDGE_WEBHOOK_SECRET", ""),
 	}
 
-	if cfg.SupabaseURL == "" {
-		return nil, fmt.Errorf("BRIDGE_SUPABASE_URL is required")
-	}
-	if cfg.WebhookSecret == "" && cfg.DeliveryMode == "webhook" {
-		return nil, fmt.Errorf("BRIDGE_WEBHOOK_SECRET is required in webhook mode")
+	if !cfg.DevMode {
+		if cfg.SupabaseURL == "" {
+			return nil, fmt.Errorf("BRIDGE_SUPABASE_URL is required")
+		}
+		if cfg.WebhookSecret == "" && cfg.DeliveryMode == "webhook" {
+			return nil, fmt.Errorf("BRIDGE_WEBHOOK_SECRET is required in webhook mode")
+		}
 	}
 
 	return cfg, nil

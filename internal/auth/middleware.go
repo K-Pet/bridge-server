@@ -35,6 +35,16 @@ func Middleware(supabaseURL string) func(http.Handler) http.Handler {
 	}
 }
 
+// DevMiddleware bypasses auth and injects a fixed dev user ID.
+func DevMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := context.WithValue(r.Context(), userIDKey, "dev-user")
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
 func UserID(ctx context.Context) string {
 	if v, ok := ctx.Value(userIDKey).(string); ok {
 		return v

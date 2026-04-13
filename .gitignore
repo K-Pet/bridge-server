@@ -30,4 +30,11 @@ vendor/
 
 # Node (frontend)
 node_modules/
-frontend/dist/
+
+# Frontend build output (rebuilt from frontend/ source)
+web/dist/*
+!web/dist/.gitkeep
+!web/dist/index.html
+
+# Tilt
+.tilt-dev/

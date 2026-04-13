@@ -4,13 +4,10 @@ FROM deluan/navidrome:0.61.1 AS navidrome
 # --- Stage 2: build frontend ----------------------------------------
 FROM node:22-alpine AS frontend
 WORKDIR /src
-# Uncomment when you have a real frontend project:
-# COPY frontend/package*.json ./
-# RUN npm ci
-# COPY frontend/ ./
-# RUN npm run build
-# For now, copy the placeholder:
-COPY web/dist ./dist
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
 
 # --- Stage 3: build bridge-server ------------------------------------
 FROM golang:1.23-alpine AS sidecar
@@ -19,7 +16,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=frontend /src/dist ./web/dist
+COPY --from=frontend /web/dist ./web/dist
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" \
     -o /out/bridge-server ./cmd/bridge-server
 
