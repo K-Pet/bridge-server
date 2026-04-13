@@ -1,6 +1,23 @@
+@font-face {
+  font-family: 'Satoshi';
+  src: url('./assets/fonts/Satoshi-Variable.woff2') format('woff2'),
+       url('./assets/fonts/Satoshi-Variable.woff') format('woff');
+  font-weight: 300 900;
+  font-display: swap;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Satoshi';
+  src: url('./assets/fonts/Satoshi-VariableItalic.woff2') format('woff2'),
+       url('./assets/fonts/Satoshi-VariableItalic.woff') format('woff');
+  font-weight: 300 900;
+  font-display: swap;
+  font-style: italic;
+}
+
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
-    Ubuntu, Cantarell, 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  font-family: 'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color-scheme: dark;
@@ -547,7 +564,7 @@ h3 {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: var(--secondary);
+  background: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -730,6 +747,26 @@ h3 {
   50% { transform: scaleY(1); }
 }
 
+/* ==================== Disc Header ==================== */
+
+.disc-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border);
+  margin-top: 0.75rem;
+}
+
+.disc-header:first-child {
+  margin-top: 0;
+}
+
 /* ==================== Detail Pages ==================== */
 
 .detail-page {
@@ -853,7 +890,7 @@ h3 {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  background: var(--secondary);
+  background: var(--accent);
   color: #fff;
   border: none;
   border-radius: 99px;

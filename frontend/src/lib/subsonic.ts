@@ -51,6 +51,7 @@ export interface Song {
   artist: string
   artistId: string
   track?: number
+  discNumber?: number
   year?: number
   genre?: string
   duration: number

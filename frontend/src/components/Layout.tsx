@@ -2,7 +2,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import { getSupabase, isDevMode } from '../lib/supabase'
 import { usePlayer } from '../context/PlayerContext'
 import Player from './Player'
-import bridgeLogo from '../assets/Bridge-Main-Logo.svg'
+import bridgeLogo from '../assets/icons/Bridge-Main-Logo.svg'
 
 export default function Layout() {
   const { currentSong } = usePlayer()

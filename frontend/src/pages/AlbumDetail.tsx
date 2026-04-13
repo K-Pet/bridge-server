@@ -30,6 +30,9 @@ export default function AlbumDetail() {
   const totalDuration = songs.reduce((sum, s) => sum + s.duration, 0)
   const isCurrentAlbum = currentSong && songs.some(s => s.id === currentSong.id)
 
+  const discNumbers = [...new Set(songs.map(s => s.discNumber ?? 1))].sort((a, b) => a - b)
+  const isMultiDisc = discNumbers.length > 1
+
   return (
     <div className="detail-page">
       <Link to={`/artist/${album.artistId}`} className="back-link">
@@ -79,30 +82,64 @@ export default function AlbumDetail() {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
           </span>
         </div>
-        {songs.map((song, i) => {
-          const active = currentSong?.id === song.id
-          return (
-            <button
-              key={song.id}
-              className={`song-row ${active ? 'active' : ''}`}
-              onClick={() => playSong(song, songs)}
-            >
-              <span className="song-num">
-                {active && isPlaying ? (
-                  <span className="playing-indicator">
-                    <span /><span /><span />
+        {isMultiDisc
+          ? discNumbers.flatMap(disc => {
+              const discSongs = songs.filter(s => (s.discNumber ?? 1) === disc)
+              return [
+                <div key={`disc-${disc}`} className="disc-header">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 14c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+                  Disc {disc}
+                </div>,
+                ...discSongs.map((song, i) => {
+                  const active = currentSong?.id === song.id
+                  return (
+                    <button
+                      key={song.id}
+                      className={`song-row ${active ? 'active' : ''}`}
+                      onClick={() => playSong(song, songs)}
+                    >
+                      <span className="song-num">
+                        {active && isPlaying ? (
+                          <span className="playing-indicator">
+                            <span /><span /><span />
+                          </span>
+                        ) : (
+                          song.track ?? i + 1
+                        )}
+                      </span>
+                      <div className="song-info">
+                        <span className="song-title">{song.title}</span>
+                      </div>
+                      <span className="song-duration">{formatDuration(song.duration)}</span>
+                    </button>
+                  )
+                }),
+              ]
+            })
+          : songs.map((song, i) => {
+              const active = currentSong?.id === song.id
+              return (
+                <button
+                  key={song.id}
+                  className={`song-row ${active ? 'active' : ''}`}
+                  onClick={() => playSong(song, songs)}
+                >
+                  <span className="song-num">
+                    {active && isPlaying ? (
+                      <span className="playing-indicator">
+                        <span /><span /><span />
+                      </span>
+                    ) : (
+                      song.track ?? i + 1
+                    )}
                   </span>
-                ) : (
-                  song.track ?? i + 1
-                )}
-              </span>
-              <div className="song-info">
-                <span className="song-title">{song.title}</span>
-              </div>
-              <span className="song-duration">{formatDuration(song.duration)}</span>
-            </button>
-          )
-        })}
+                  <div className="song-info">
+                    <span className="song-title">{song.title}</span>
+                  </div>
+                  <span className="song-duration">{formatDuration(song.duration)}</span>
+                </button>
+              )
+            })}
       </div>
     </div>
   )
