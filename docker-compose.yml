@@ -1,0 +1,16 @@
+services:
+  bridge-music:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/music:/data/music
+      - ./data/navidrome:/data/navidrome
+      - ./data/bridge:/data/bridge
+    environment:
+      BRIDGE_SUPABASE_URL: ${SUPABASE_URL}
+      BRIDGE_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      BRIDGE_SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
+      BRIDGE_WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      BRIDGE_DELIVERY_MODE: poll
+    restart: unless-stopped
