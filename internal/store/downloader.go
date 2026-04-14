@@ -24,22 +24,38 @@ type PurchaseStatusUpdater interface {
 	MarkPurchaseStatus(ctx context.Context, purchaseID, status string) error
 }
 
+// EventPublisher lets the downloader emit live progress events without
+// importing internal/api (which would create a cycle). main.go passes in an
+// adapter over the api.EventHub.
+type EventPublisher interface {
+	PublishTaskEvent(eventType, purchaseID, taskID, status string, data map[string]any)
+}
+
 type Downloader struct {
 	cfg      *config.Config
 	queue    *Queue
 	nd       *navidrome.Client
 	supabase PurchaseStatusUpdater
+	events   EventPublisher
 	client   *http.Client
 }
 
-func NewDownloader(cfg *config.Config, queue *Queue, nd *navidrome.Client, sb PurchaseStatusUpdater) *Downloader {
+func NewDownloader(cfg *config.Config, queue *Queue, nd *navidrome.Client, sb PurchaseStatusUpdater, ev EventPublisher) *Downloader {
 	return &Downloader{
 		cfg:      cfg,
 		queue:    queue,
 		nd:       nd,
 		supabase: sb,
+		events:   ev,
 		client:   &http.Client{Timeout: 10 * time.Minute},
 	}
+}
+
+func (d *Downloader) publish(eventType, purchaseID, taskID, status string, data map[string]any) {
+	if d.events == nil {
+		return
+	}
+	d.events.PublishTaskEvent(eventType, purchaseID, taskID, status, data)
 }
 
 // Run processes download tasks from the queue until the context is cancelled.
@@ -66,16 +82,20 @@ func (d *Downloader) Run(ctx context.Context) {
 		if err := d.process(ctx, task); err != nil {
 			slog.Error("download failed", "task", task.ID, "error", err)
 			d.queue.UpdateStatus(task.ID, StatusFailed, err.Error())
+			d.publish("task_status", task.PurchaseID, task.ID, string(StatusFailed), map[string]any{"error": err.Error()})
 			d.reconcilePurchase(ctx, task.PurchaseID)
 			continue
 		}
 
 		slog.Info("download complete, triggering scan", "task", task.ID)
 		d.queue.UpdateStatus(task.ID, StatusScanning, "")
+		d.publish("task_status", task.PurchaseID, task.ID, string(StatusScanning), nil)
 		if err := d.nd.StartScan(ctx); err != nil {
 			slog.Error("scan failed", "task", task.ID, "error", err)
 		}
 		d.queue.UpdateStatus(task.ID, StatusComplete, "")
+		d.publish("task_status", task.PurchaseID, task.ID, string(StatusComplete), nil)
+		d.publish("library_updated", task.PurchaseID, task.ID, "", nil)
 		d.reconcilePurchase(ctx, task.PurchaseID)
 	}
 }
@@ -109,6 +129,7 @@ func (d *Downloader) reconcilePurchase(ctx context.Context, purchaseID string) {
 
 func (d *Downloader) process(ctx context.Context, task *DownloadTask) error {
 	d.queue.UpdateStatus(task.ID, StatusDownloading, "")
+	d.publish("task_status", task.PurchaseID, task.ID, string(StatusDownloading), nil)
 
 	track := task.Track
 	if track.SizeBytes > MaxDownloadSize {
@@ -171,6 +192,7 @@ func (d *Downloader) process(ctx context.Context, task *DownloadTask) error {
 	}
 
 	d.queue.UpdateStatus(task.ID, StatusWritten, "")
+	d.publish("task_status", task.PurchaseID, task.ID, string(StatusWritten), map[string]any{"bytes": written})
 	return nil
 }
 

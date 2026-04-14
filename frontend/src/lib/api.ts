@@ -129,6 +129,35 @@ export async function getSettings() {
   return apiFetch<{ delivery_mode: string; poll_interval: string }>('/api/settings')
 }
 
+export interface BridgeEvent {
+  type: string
+  purchase_id?: string
+  task_id?: string
+  status?: string
+  data?: Record<string, unknown>
+}
+
+// subscribeEvents opens an SSE connection to the bridge server and invokes
+// onEvent for every event. Returns an unsubscribe function.
+// EventSource handles reconnection automatically on transient drops.
+export function subscribeEvents(onEvent: (e: BridgeEvent) => void): () => void {
+  const es = new EventSource('/api/events')
+  const handler = (ev: MessageEvent) => {
+    try {
+      const parsed = JSON.parse(ev.data) as BridgeEvent
+      onEvent(parsed)
+    } catch {
+      // Ignore malformed payloads; heartbeats come through as SSE comments
+      // and never fire `message`, so this should only trip on server bugs.
+    }
+  }
+  // Listen for every event type the server emits today.
+  for (const t of ['hello', 'task_status', 'library_updated', 'purchase_enqueued']) {
+    es.addEventListener(t, handler)
+  }
+  return () => es.close()
+}
+
 export interface PurchaseResult {
   purchase_id: string
   status: string

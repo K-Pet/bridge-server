@@ -22,6 +22,12 @@ type Config struct {
 	DeliveryMode string
 	PollInterval time.Duration
 
+	// ServerID identifies this home server to Supabase in poll mode — the
+	// marketplace writes purchases with `server_id = <this>` and the poller
+	// picks them up. In webhook mode Supabase uses this to route the HTTP
+	// callback. Must be unique per user-installed home server.
+	ServerID string
+
 	MasterSecret string
 
 	// DevMode disables Supabase auth requirements for local development.
@@ -37,6 +43,7 @@ func Load() (*Config, error) {
 		NavidromeURL: envStr("BRIDGE_ND_URL", "http://127.0.0.1:4533"),
 		DeliveryMode: envStr("BRIDGE_DELIVERY_MODE", "poll"),
 		PollInterval: envDuration("BRIDGE_POLL_INTERVAL", 5*time.Minute),
+		ServerID:     envStr("BRIDGE_SERVER_ID", ""),
 		MasterSecret: envStr("BRIDGE_SECRET", ""),
 		DevMode:      envStr("BRIDGE_DEV", "") == "true",
 
@@ -54,6 +61,12 @@ func Load() (*Config, error) {
 		if cfg.WebhookSecret == "" && cfg.DeliveryMode == "webhook" {
 			return nil, fmt.Errorf("BRIDGE_WEBHOOK_SECRET is required in webhook mode")
 		}
+		if cfg.ServerID == "" && cfg.DeliveryMode == "poll" {
+			return nil, fmt.Errorf("BRIDGE_SERVER_ID is required in poll mode")
+		}
+	}
+	if cfg.DevMode && cfg.ServerID == "" {
+		cfg.ServerID = "local-dev"
 	}
 
 	return cfg, nil

@@ -190,12 +190,16 @@ func lookupTrackPrice(client *http.Client, cfg *config.Config, trackID string) (
 }
 
 func createPurchase(client *http.Client, cfg *config.Config, userID string, totalCents int) (string, error) {
+	serverID := cfg.ServerID
+	if serverID == "" {
+		serverID = "local-dev"
+	}
 	body, _ := json.Marshal([]map[string]any{{
 		"user_id":     userID,
 		"total_cents": totalCents,
 		"payment_ref": "dev-test-" + time.Now().Format("20060102-150405"),
 		"status":      "pending",
-		"server_id":   "local-dev",
+		"server_id":   serverID,
 	}})
 
 	url := cfg.SupabaseURL + "/rest/v1/purchases"

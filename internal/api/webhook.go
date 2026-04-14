@@ -13,6 +13,7 @@ import (
 type webhookHandler struct {
 	cfg   *config.Config
 	queue *store.Queue
+	hub   *EventHub
 }
 
 func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +33,13 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("purchase enqueued", "purchase_id", purchase.ID, "tracks", len(purchase.Tracks))
+	if h.hub != nil {
+		h.hub.Publish(Event{
+			Type:     "purchase_enqueued",
+			Purchase: purchase.ID,
+			Data:     map[string]any{"tracks": len(purchase.Tracks)},
+		})
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
 }

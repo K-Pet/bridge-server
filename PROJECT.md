@@ -239,6 +239,7 @@ All Bridge Server config uses the `BRIDGE_` env var prefix:
 | `BRIDGE_WEBHOOK_SECRET` | (required) | HMAC secret for webhook signature verification |
 | `BRIDGE_DELIVERY_MODE` | `poll` | `webhook` or `poll` |
 | `BRIDGE_POLL_INTERVAL` | `5m` | Poll interval (only in poll mode) |
+| `BRIDGE_SERVER_ID` | (required in poll mode) | Unique id for this home server; marketplace writes `purchases.server_id = <this>` |
 | `BRIDGE_SECRET` | (optional) | Master secret for deterministic ND admin password |
 | `BRIDGE_ND_URL` | `http://127.0.0.1:4533` | Navidrome internal URL (don't change in Docker) |
 
@@ -349,9 +350,10 @@ to user home servers.
 - [x] **[dev harness]** embedded marketplace page for E2E testing — will be removed or hidden once the RN/web storefront is live
 
 ### M4: Live Updates + Polish
-- [ ] WebSocket endpoint `/ws` for live events (not yet wired — `ws.go` from the package layout is missing)
-- [ ] Frontend receives `library_updated` + scan progress and refreshes automatically
-- [ ] Per-task download progress (bytes streamed) pushed to UI — currently only status transitions are visible
+- [x] Live event channel at `GET /api/events` (Server-Sent Events; chosen over raw WebSockets because we only push server→client and want zero deps)
+- [x] Frontend receives `task_status` / `library_updated` / `purchase_enqueued` events — Purchases page auto-refreshes on any delivery change (replaces the old 5s polling fallback)
+- [ ] Library page subscribes to `library_updated` and refreshes artists/albums automatically
+- [ ] Per-task byte-count progress pushed during download (currently only emitted at status transitions: downloading/written/scanning/complete)
 - [ ] Retry UI for individual failed tasks (whole-purchase redeliver exists; per-track retry does not)
 - [ ] Reconcile-on-boot sweep: mark purchases as `delivered`/`failed` based on queue state at startup
 
@@ -364,10 +366,11 @@ to user home servers.
 - [ ] iOS app: "Connect Home Server" flow (enter server URL, verify connectivity, persist base URL)
 
 ### M6: Storefront Integration (new — tracks the separate RN/web repo)
-- [ ] Define the Supabase→server purchase contract as a stable spec (schema of `purchases`/`purchase_items` + `deliver-purchase` payload) so the RN/web repo can produce rows this server already knows how to consume
-- [ ] Document the `server_id` → user-home-server mapping so Supabase knows which URL to webhook (or which rows a server should poll)
-- [ ] HMAC shared secret provisioning: how a freshly-installed home server registers itself and receives `BRIDGE_WEBHOOK_SECRET`
-- [ ] Stripe webhook → Supabase → home server flow tested end-to-end with a real Stripe test-mode payment (owned by the RN/web repo, but validated against this server)
+- [x] Initial purchase contract spec drafted — see [`docs/PURCHASE_CONTRACT.md`](docs/PURCHASE_CONTRACT.md)
+- [x] `BRIDGE_SERVER_ID` config wired end-to-end (poller, marketplace dev harness); required in poll mode outside dev
+- [ ] Formalise `server_id` → user-home-server mapping table (likely `user_home_servers` in the storefront repo); first-boot QR/pairing-code UI on this server
+- [ ] HMAC shared secret provisioning: how a freshly-installed home server registers itself and receives `BRIDGE_WEBHOOK_SECRET` (per-server secrets, see §6 of the contract)
+- [ ] Stripe webhook → Supabase → home server flow tested end-to-end with a real Stripe test-mode payment (owned by the RN/web repo, validated against this server)
 - [ ] Remove / feature-flag the dev-mode embedded marketplace UI once the RN app ships
 
 ## Security Considerations

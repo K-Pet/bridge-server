@@ -4,6 +4,7 @@ import {
   redeliverPurchase,
   getTrackDownloadURL,
   downloadAlbumZip,
+  subscribeEvents,
   type Purchase,
   type PurchaseItem,
   type PurchasedTrack,
@@ -79,17 +80,21 @@ export default function Purchases() {
     return () => { cancelled = true }
   }, [pollTick])
 
-  // Auto-refresh while any purchase is still delivering
+  // Live refresh: subscribe to server events once and re-fetch purchases on
+  // any delivery-related signal. The SSE channel replaces the 5s poll loop —
+  // we only refetch when the server tells us something actually changed.
   useEffect(() => {
-    const inFlight = purchases.some(p => {
-      const d = p.delivery
-      if (d && d.total > 0 && !d.terminal) return true
-      return p.status === 'delivering' || p.status === 'pending'
+    const unsubscribe = subscribeEvents((ev) => {
+      if (
+        ev.type === 'task_status' ||
+        ev.type === 'library_updated' ||
+        ev.type === 'purchase_enqueued'
+      ) {
+        setPollTick((t) => t + 1)
+      }
     })
-    if (!inFlight) return
-    const id = window.setTimeout(() => setPollTick(t => t + 1), 5000)
-    return () => window.clearTimeout(id)
-  }, [purchases])
+    return unsubscribe
+  }, [])
 
   async function handleRedeliver(purchaseId: string) {
     setRedelivering(purchaseId)

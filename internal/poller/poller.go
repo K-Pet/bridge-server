@@ -44,9 +44,11 @@ func (p *Poller) Run(ctx context.Context) {
 }
 
 func (p *Poller) poll(ctx context.Context) {
-	// TODO: derive serverID from config or stored registration
-	serverID := "TODO"
-	purchases, err := p.client.FetchPendingPurchases(ctx, serverID)
+	if p.cfg.ServerID == "" {
+		slog.Warn("poll skipped: BRIDGE_SERVER_ID is empty")
+		return
+	}
+	purchases, err := p.client.FetchPendingPurchases(ctx, p.cfg.ServerID)
 	if err != nil {
 		slog.Error("poll failed", "error", err)
 		return

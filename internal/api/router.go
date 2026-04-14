@@ -11,7 +11,7 @@ import (
 	"github.com/bridgemusic/bridge-server/web"
 )
 
-func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue) http.Handler {
+func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue, hub *EventHub) http.Handler {
 	mux := http.NewServeMux()
 
 	// Health check (unauthenticated)
@@ -24,8 +24,14 @@ func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue) htt
 	// initialise auth at runtime without baking credentials into the JS build.
 	mux.HandleFunc("GET /api/config", handleConfig(cfg))
 
+	// Live event stream (SSE). Unauthenticated for now — in production this
+	// should sit behind the same auth middleware as the rest of /api/*.
+	if hub != nil {
+		mux.HandleFunc("GET /api/events", handleEvents(hub))
+	}
+
 	// Webhook endpoint (authenticated via signature, not JWT)
-	mux.Handle("POST /api/webhook/purchase", &webhookHandler{cfg: cfg, queue: queue})
+	mux.Handle("POST /api/webhook/purchase", &webhookHandler{cfg: cfg, queue: queue, hub: hub})
 
 	// Authenticated Bridge API routes
 	authed := http.NewServeMux()
