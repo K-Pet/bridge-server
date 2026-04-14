@@ -63,6 +63,23 @@ func handleMarketplacePurchase(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
+		// Guard against duplicate purchases — check existing entitlements.
+		// A track is considered owned if either the track or its parent album
+		// is already in the user's purchases.
+		ownedAlbums, ownedTracks, entErr := fetchEntitlements(client, cfg, userID)
+		if entErr != nil {
+			slog.Warn("entitlement check failed; proceeding with purchase", "error", entErr)
+		} else {
+			if req.AlbumID != "" && contains(ownedAlbums, req.AlbumID) {
+				writeJSONError(w, http.StatusConflict, "album_already_owned", "This album is already in your library.")
+				return
+			}
+			if req.TrackID != "" && contains(ownedTracks, req.TrackID) {
+				writeJSONError(w, http.StatusConflict, "track_already_owned", "This track is already in your library.")
+				return
+			}
+		}
+
 		// Look up the price from the catalog
 		var priceCents int
 		var itemType string
@@ -296,4 +313,22 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func writeJSONError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error":   code,
+		"message": message,
+	})
 }

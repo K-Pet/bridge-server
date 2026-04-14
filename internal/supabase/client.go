@@ -56,9 +56,19 @@ func (c *Client) FetchPendingPurchases(ctx context.Context, serverID string) ([]
 
 // MarkDelivered updates a purchase status to "delivered" in Supabase.
 func (c *Client) MarkDelivered(ctx context.Context, purchaseID string) error {
+	return c.MarkPurchaseStatus(ctx, purchaseID, "delivered")
+}
+
+// MarkPurchaseStatus patches an arbitrary status (one of: pending, delivering,
+// delivered, failed) on a purchase row. Used by the downloader to reconcile
+// delivery state once all tasks for a purchase reach a terminal state.
+func (c *Client) MarkPurchaseStatus(ctx context.Context, purchaseID, status string) error {
+	if c.cfg.SupabaseURL == "" || c.cfg.SupabaseServiceKey == "" {
+		return nil
+	}
 	url := fmt.Sprintf("%s/rest/v1/purchases?id=eq.%s", c.cfg.SupabaseURL, purchaseID)
 
-	body := strings.NewReader(`{"status":"delivered"}`)
+	body := strings.NewReader(fmt.Sprintf(`{"status":%q}`, status))
 	req, err := http.NewRequestWithContext(ctx, "PATCH", url, body)
 	if err != nil {
 		return err

@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react'
 import { getSupabase } from '../lib/supabase'
-import { purchaseAlbum, purchaseTrack, type PurchaseResult } from '../lib/api'
+import {
+  purchaseAlbum,
+  purchaseTrack,
+  getEntitlements,
+  getTrackDownloadURL,
+  downloadAlbumZip,
+  AlreadyOwnedError,
+  type PurchaseResult,
+} from '../lib/api'
 
 interface CatalogAlbum {
   id: string
@@ -45,6 +53,10 @@ export default function Marketplace() {
   const [purchases, setPurchases] = useState<Purchase[]>([])
   const [buying, setBuying] = useState<string | null>(null)
   const [lastResult, setLastResult] = useState<PurchaseResult | null>(null)
+  const [ownedAlbums, setOwnedAlbums] = useState<Set<string>>(new Set())
+  const [ownedTracks, setOwnedTracks] = useState<Set<string>>(new Set())
+  const [toastError, setToastError] = useState<string | null>(null)
+  const [downloading, setDownloading] = useState<string | null>(null)
 
   // Fetch catalog albums from Supabase
   useEffect(() => {
@@ -65,9 +77,10 @@ export default function Marketplace() {
       })
   }, [])
 
-  // Fetch recent purchases
+  // Fetch recent purchases + entitlements
   useEffect(() => {
     refreshPurchases()
+    refreshEntitlements()
   }, [])
 
   function refreshPurchases() {
@@ -82,6 +95,15 @@ export default function Marketplace() {
       .then(({ data }) => {
         if (data) setPurchases(data as Purchase[])
       })
+  }
+
+  function refreshEntitlements() {
+    getEntitlements()
+      .then(ent => {
+        setOwnedAlbums(new Set(ent.album_ids))
+        setOwnedTracks(new Set(ent.track_ids))
+      })
+      .catch(() => {})
   }
 
   // Fetch tracks for selected album
@@ -105,28 +127,80 @@ export default function Marketplace() {
   }
 
   async function handleBuyAlbum(album: CatalogAlbum) {
+    if (ownedAlbums.has(album.id)) {
+      setToastError('You already own this album.')
+      return
+    }
     setBuying(album.id)
     setLastResult(null)
+    setToastError(null)
     try {
       const result = await purchaseAlbum(album.id)
       setLastResult(result)
       refreshPurchases()
+      refreshEntitlements()
     } catch (err) {
-      setLastResult({ purchase_id: '', status: 'error', delivery_error: String(err) })
+      if (err instanceof AlreadyOwnedError) {
+        setToastError(err.message)
+        refreshEntitlements()
+      } else {
+        setLastResult({ purchase_id: '', status: 'error', delivery_error: String(err) })
+      }
     } finally {
       setBuying(null)
     }
   }
 
+  async function handleDownloadTrack(trackId: string) {
+    setDownloading(trackId)
+    try {
+      const { url, filename } = await getTrackDownloadURL(trackId)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.rel = 'noopener'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch (err) {
+      setToastError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDownloading(null)
+    }
+  }
+
+  async function handleDownloadAlbum(albumId: string) {
+    const groupKey = `album:${albumId}`
+    setDownloading(groupKey)
+    try {
+      await downloadAlbumZip(albumId)
+    } catch (err) {
+      setToastError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDownloading(null)
+    }
+  }
+
   async function handleBuyTrack(track: CatalogTrack) {
+    if (ownedTracks.has(track.id) || (track.album_id && ownedAlbums.has(track.album_id))) {
+      setToastError('You already own this track.')
+      return
+    }
     setBuying(track.id)
     setLastResult(null)
+    setToastError(null)
     try {
       const result = await purchaseTrack(track.id)
       setLastResult(result)
       refreshPurchases()
+      refreshEntitlements()
     } catch (err) {
-      setLastResult({ purchase_id: '', status: 'error', delivery_error: String(err) })
+      if (err instanceof AlreadyOwnedError) {
+        setToastError(err.message)
+        refreshEntitlements()
+      } else {
+        setLastResult({ purchase_id: '', status: 'error', delivery_error: String(err) })
+      }
     } finally {
       setBuying(null)
     }
@@ -137,6 +211,15 @@ export default function Marketplace() {
   return (
     <div className="marketplace-page">
       <h2>Marketplace</h2>
+
+      {toastError && (
+        <div className="marketplace-toast toast-warning">
+          <strong>Already owned</strong> — {toastError}
+          <button className="toast-close" onClick={() => setToastError(null)}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+          </button>
+        </div>
+      )}
 
       {lastResult && (
         <div className={`marketplace-toast ${lastResult.delivery_error ? 'toast-warning' : 'toast-success'}`}>
@@ -165,8 +248,13 @@ export default function Marketplace() {
           tracks={tracks}
           loading={loadingTracks}
           buying={buying}
+          downloading={downloading}
+          ownedAlbums={ownedAlbums}
+          ownedTracks={ownedTracks}
           onBuyAlbum={handleBuyAlbum}
           onBuyTrack={handleBuyTrack}
+          onDownloadTrack={handleDownloadTrack}
+          onDownloadAlbum={handleDownloadAlbum}
           onBack={() => { setSelectedAlbum(null); setTracks([]) }}
         />
       ) : (
@@ -178,28 +266,31 @@ export default function Marketplace() {
             </div>
           ) : (
             <div className="album-grid">
-              {albums.map(album => (
-                <button
-                  key={album.id}
-                  className="album-card marketplace-album-card"
-                  onClick={() => selectAlbum(album)}
-                >
-                  <div className="album-cover">
-                    {album.cover_art_url ? (
-                      <img src={album.cover_art_url} alt={album.title} loading="lazy" />
-                    ) : (
-                      <div className="cover-placeholder">
-                        <svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" /></svg>
+              {albums.map(album => {
+                const owned = ownedAlbums.has(album.id)
+                return (
+                  <button
+                    key={album.id}
+                    className={`album-card marketplace-album-card${owned ? ' marketplace-album-owned' : ''}`}
+                    onClick={() => selectAlbum(album)}
+                  >
+                    <div className="album-cover">
+                      {album.cover_art_url ? (
+                        <img src={album.cover_art_url} alt={album.title} loading="lazy" />
+                      ) : (
+                        <div className="cover-placeholder">
+                          <svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" /></svg>
+                        </div>
+                      )}
+                      <div className={`marketplace-price-badge${owned ? ' marketplace-owned-badge' : ''}`}>
+                        {owned ? 'Owned' : formatPrice(album.price_cents)}
                       </div>
-                    )}
-                    <div className="marketplace-price-badge">
-                      {formatPrice(album.price_cents)}
                     </div>
-                  </div>
-                  <span className="card-title">{album.title}</span>
-                  <span className="card-subtitle">{album.artist}</span>
-                </button>
-              ))}
+                    <span className="card-title">{album.title}</span>
+                    <span className="card-subtitle">{album.artist}</span>
+                  </button>
+                )
+              })}
             </div>
           )}
         </>
@@ -241,16 +332,25 @@ export default function Marketplace() {
 }
 
 function AlbumDetail({
-  album, tracks, loading, buying, onBuyAlbum, onBuyTrack, onBack,
+  album, tracks, loading, buying, downloading, ownedAlbums, ownedTracks,
+  onBuyAlbum, onBuyTrack, onDownloadTrack, onDownloadAlbum, onBack,
 }: {
   album: CatalogAlbum
   tracks: CatalogTrack[]
   loading: boolean
   buying: string | null
+  downloading: string | null
+  ownedAlbums: Set<string>
+  ownedTracks: Set<string>
   onBuyAlbum: (album: CatalogAlbum) => void
   onBuyTrack: (track: CatalogTrack) => void
+  onDownloadTrack: (trackId: string) => void
+  onDownloadAlbum: (albumId: string) => void
   onBack: () => void
 }) {
+  const albumOwned = ownedAlbums.has(album.id)
+  const ownedTracksInAlbum = tracks.filter(t => albumOwned || ownedTracks.has(t.id))
+  const albumGroupKey = `album:${album.id}`
   // Group tracks by disc number
   const discs = new Map<number, CatalogTrack[]>()
   for (const t of tracks) {
@@ -286,23 +386,43 @@ function AlbumDetail({
             {` \u00B7 ${tracks.length} track${tracks.length !== 1 ? 's' : ''}`}
           </div>
           <div className="album-actions">
-            <button
-              className="btn-primary"
-              onClick={() => onBuyAlbum(album)}
-              disabled={buying !== null}
-            >
-              {buying === album.id ? (
-                <>
-                  <span className="spinner-sm" />
-                  Purchasing...
-                </>
-              ) : (
-                <>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" /><line x1="3" y1="6" x2="21" y2="6" /><path d="M16 10a4 4 0 0 1-8 0" /></svg>
-                  Buy Album {formatPrice(album.price_cents)}
-                </>
-              )}
-            </button>
+            {albumOwned ? (
+              <>
+                <button className="btn-primary" disabled>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12" /></svg>
+                  Owned
+                </button>
+                {ownedTracksInAlbum.length > 0 && (
+                  <button
+                    className="btn-secondary"
+                    onClick={() => onDownloadAlbum(album.id)}
+                    disabled={downloading !== null}
+                    title="Download every track in this album as a zip"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                    {downloading === albumGroupKey ? 'Zipping...' : `Download zip (${ownedTracksInAlbum.length})`}
+                  </button>
+                )}
+              </>
+            ) : (
+              <button
+                className="btn-primary"
+                onClick={() => onBuyAlbum(album)}
+                disabled={buying !== null}
+              >
+                {buying === album.id ? (
+                  <>
+                    <span className="spinner-sm" />
+                    Purchasing...
+                  </>
+                ) : (
+                  <>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" /><line x1="3" y1="6" x2="21" y2="6" /><path d="M16 10a4 4 0 0 1-8 0" /></svg>
+                    Buy Album {formatPrice(album.price_cents)}
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -326,28 +446,42 @@ function AlbumDetail({
                   Disc {discNum}
                 </div>
               )}
-              {discTracks.map((track) => (
-                <div key={track.id} className="song-row marketplace-track-row">
-                  <span className="song-num">{track.album_index}</span>
-                  <div className="song-info">
-                    <span className="song-title">{track.title}</span>
-                    <span className="song-meta">{track.artist}</span>
+              {discTracks.map((track) => {
+                const trackOwned = albumOwned || ownedTracks.has(track.id)
+                return (
+                  <div key={track.id} className={`song-row marketplace-track-row${trackOwned ? ' marketplace-track-owned' : ''}`}>
+                    <span className="song-num">{track.album_index}</span>
+                    <div className="song-info">
+                      <span className="song-title">{track.title}</span>
+                      <span className="song-meta">{track.artist}</span>
+                    </div>
+                    <span className="marketplace-track-format">{track.format?.toUpperCase()}</span>
+                    <span className="marketplace-track-price">
+                      {trackOwned ? '—' : formatPrice(track.price_cents)}
+                    </span>
+                    <span className="marketplace-track-action">
+                      {trackOwned ? (
+                        <button
+                          className="btn-buy-track"
+                          onClick={() => onDownloadTrack(track.id)}
+                          disabled={downloading !== null}
+                          title="Download this track to your device"
+                        >
+                          {downloading === track.id ? '...' : 'Download'}
+                        </button>
+                      ) : track.price_cents != null && (
+                        <button
+                          className="btn-buy-track"
+                          onClick={() => onBuyTrack(track)}
+                          disabled={buying !== null}
+                        >
+                          {buying === track.id ? '...' : 'Buy'}
+                        </button>
+                      )}
+                    </span>
                   </div>
-                  <span className="marketplace-track-format">{track.format?.toUpperCase()}</span>
-                  <span className="marketplace-track-price">{formatPrice(track.price_cents)}</span>
-                  <span className="marketplace-track-action">
-                    {track.price_cents != null && (
-                      <button
-                        className="btn-buy-track"
-                        onClick={() => onBuyTrack(track)}
-                        disabled={buying !== null}
-                      >
-                        {buying === track.id ? '...' : 'Buy'}
-                      </button>
-                    )}
-                  </span>
-                </div>
-              ))}
+                )
+              })}
             </div>
           ))}
         </div>

@@ -59,8 +59,11 @@ func (p *Poller) poll(ctx context.Context) {
 				continue
 			}
 		}
-		if err := p.client.MarkDelivered(ctx, purchase.ID); err != nil {
-			slog.Warn("failed to mark purchase delivered", "purchase", purchase.ID, "error", err)
+		// Flip status to "delivering" so the UI reflects that work is in flight.
+		// The downloader will move it to "delivered" (or "failed") once every task
+		// reaches a terminal state — see Downloader.reconcilePurchase.
+		if err := p.client.MarkPurchaseStatus(ctx, purchase.ID, "delivering"); err != nil {
+			slog.Warn("failed to mark purchase delivering", "purchase", purchase.ID, "error", err)
 		}
 	}
 

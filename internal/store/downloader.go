@@ -18,19 +18,27 @@ import (
 	"github.com/bridgemusic/bridge-server/internal/navidrome"
 )
 
+// PurchaseStatusUpdater is implemented by a Supabase client.
+// Kept as an interface here to avoid an import cycle with internal/supabase.
+type PurchaseStatusUpdater interface {
+	MarkPurchaseStatus(ctx context.Context, purchaseID, status string) error
+}
+
 type Downloader struct {
 	cfg      *config.Config
 	queue    *Queue
 	nd       *navidrome.Client
+	supabase PurchaseStatusUpdater
 	client   *http.Client
 }
 
-func NewDownloader(cfg *config.Config, queue *Queue, nd *navidrome.Client) *Downloader {
+func NewDownloader(cfg *config.Config, queue *Queue, nd *navidrome.Client, sb PurchaseStatusUpdater) *Downloader {
 	return &Downloader{
-		cfg:    cfg,
-		queue:  queue,
-		nd:     nd,
-		client: &http.Client{Timeout: 10 * time.Minute},
+		cfg:      cfg,
+		queue:    queue,
+		nd:       nd,
+		supabase: sb,
+		client:   &http.Client{Timeout: 10 * time.Minute},
 	}
 }
 
@@ -58,6 +66,7 @@ func (d *Downloader) Run(ctx context.Context) {
 		if err := d.process(ctx, task); err != nil {
 			slog.Error("download failed", "task", task.ID, "error", err)
 			d.queue.UpdateStatus(task.ID, StatusFailed, err.Error())
+			d.reconcilePurchase(ctx, task.PurchaseID)
 			continue
 		}
 
@@ -67,7 +76,35 @@ func (d *Downloader) Run(ctx context.Context) {
 			slog.Error("scan failed", "task", task.ID, "error", err)
 		}
 		d.queue.UpdateStatus(task.ID, StatusComplete, "")
+		d.reconcilePurchase(ctx, task.PurchaseID)
 	}
+}
+
+// reconcilePurchase checks if all tasks for a purchase are terminal and, if so,
+// updates the Supabase purchase row to "delivered" (all complete) or "failed"
+// (any task failed). Safe to call repeatedly — subsequent calls are idempotent.
+func (d *Downloader) reconcilePurchase(ctx context.Context, purchaseID string) {
+	if d.supabase == nil || purchaseID == "" {
+		return
+	}
+	summaries, err := d.queue.SummariesForPurchases([]string{purchaseID})
+	if err != nil {
+		slog.Warn("reconcile: fetch summary failed", "purchase", purchaseID, "error", err)
+		return
+	}
+	s, ok := summaries[purchaseID]
+	if !ok || !s.Terminal {
+		return
+	}
+	status := "delivered"
+	if s.AnyFailed {
+		status = "failed"
+	}
+	if err := d.supabase.MarkPurchaseStatus(ctx, purchaseID, status); err != nil {
+		slog.Warn("reconcile: update supabase status failed", "purchase", purchaseID, "status", status, "error", err)
+		return
+	}
+	slog.Info("reconcile: purchase marked", "purchase", purchaseID, "status", status)
 }
 
 func (d *Downloader) process(ctx context.Context, task *DownloadTask) error {

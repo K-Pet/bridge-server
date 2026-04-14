@@ -300,43 +300,75 @@ Navidrome is pinned by Docker image tag in the Dockerfile. To update:
 - `POST /auth/login` — JWT mint (Navidrome-specific)
 - Native API endpoints — for library browsing (Navidrome-specific, may change between versions)
 
+## Scope (as of 2026-04-14)
+
+The **marketplace storefront** (browse catalog, cart, Stripe checkout) lives in a
+**separate repo** — a React Native app that ships as a tab inside the Bridge Music
+iOS SwiftUI app, plus a web storefront sharing the same RN/React codebase. Both
+surfaces talk directly to Supabase for catalog reads and Stripe for payments; a
+successful Stripe webhook writes a `purchases` row which Supabase then fans out
+to user home servers.
+
+**This repo's job** is the home-server sidecar only:
+- Wrap Navidrome, receive purchase events from Supabase (webhook or poll),
+  download tracks, trigger scans, stream playback to the embedded web UI.
+- The embedded `/marketplace` page and `POST /api/marketplace/purchase` endpoint
+  in this repo are **dev-only test harnesses** that simulate the RN/web buy flow
+  end-to-end without Stripe — they are not the production purchase surface.
+
 ## Development Milestones
 
-### M1: Foundation (Weeks 1–2)
-- [ ] Sidecar boots, starts Navidrome, waits for `/ping`
-- [ ] First-run bootstrap creates admin user, stores credentials
-- [ ] Sidecar authenticates to Navidrome, caches JWT
-- [ ] Reverse proxy works: `/rest/*` and `/nd/*` forward to Navidrome with injected auth
-- [ ] Health check endpoint on sidecar: `GET /api/health`
-- [ ] Config loading from env vars
+### M1: Foundation — ✅ complete
+- [x] Sidecar boots, starts Navidrome, waits for `/ping`
+- [x] First-run bootstrap creates admin user, stores credentials
+- [x] Sidecar authenticates to Navidrome, caches JWT
+- [x] Reverse proxy works: `/rest/*` and `/nd/*` forward to Navidrome with injected auth
+- [x] Health check endpoint on sidecar: `GET /api/health`
+- [x] Config loading from env vars
 
-### M2: Purchase Delivery (Weeks 3–4)
-- [ ] Persistent download queue (SQLite)
-- [ ] Webhook handler: signature verification, task enqueue
-- [ ] Download worker: fetch, checksum verify, atomic write to music dir
-- [ ] Scan trigger: call `startScan`, poll until idle
-- [ ] Poll fallback worker for NAT'd servers
-- [ ] Purchase history endpoint: `GET /api/purchases`
+### M2: Purchase Delivery — ✅ core flow working end-to-end in dev
+- [x] Persistent download queue (SQLite via modernc.org/sqlite)
+- [x] Webhook handler: signature verification, task enqueue (`POST /api/webhook/purchase`)
+- [x] Download worker: fetch, SHA-256 verify, atomic write to music dir
+- [x] Scan trigger: call `startScan`, poll until idle
+- [x] Purchase history endpoint: `GET /api/purchases` (with embedded album/track metadata + delivery summary)
+- [x] Entitlements endpoint: `GET /api/entitlements`
+- [x] Redeliver endpoint: `POST /api/purchases/{id}/redeliver`
+- [x] Per-track + whole-album download endpoints: `/api/tracks/{id}/download`, `/api/albums/{id}/zip`
+- [x] Supabase `deliver-purchase` Edge Function (fans purchase → server webhook)
+- [ ] Poll fallback worker: wire up real `server_id` registration (currently hard-coded `"TODO"` in `poller.go`)
+- [ ] Signed-URL expiry handling: refresh the URL on 403 mid-download instead of failing the task
 
-### M3: Frontend Shell (Weeks 5–6)
-- [ ] Choose framework (React/Svelte/SolidJS)
-- [ ] Auth flow: Supabase login → JWT → stored in frontend
-- [ ] Library browsing via proxied Subsonic API
-- [ ] Audio playback via proxied `/rest/stream`
-- [ ] Purchase history page
-- [ ] Settings page (delivery mode, poll interval)
+### M3: Frontend Shell — ✅ dev UI complete
+- [x] Framework chosen: React 19 + TypeScript + Vite
+- [x] Auth flow: Supabase login → JWT; runtime config fetched from `/api/config`
+- [x] Library browsing via proxied Subsonic API (artists, albums, playlists)
+- [x] Audio playback via proxied `/rest/stream` with global `PlayerContext` + persistent footer player
+- [x] Purchase history page with per-item download buttons + redeliver
+- [x] Settings page (delivery mode, poll interval, server status)
+- [x] **[dev harness]** embedded marketplace page for E2E testing — will be removed or hidden once the RN/web storefront is live
 
-### M4: Live Updates + Polish (Week 7)
-- [ ] WebSocket endpoint for live events
-- [ ] Frontend receives "library updated" and refreshes
-- [ ] Download progress tracking
-- [ ] Error states and retry UI
+### M4: Live Updates + Polish
+- [ ] WebSocket endpoint `/ws` for live events (not yet wired — `ws.go` from the package layout is missing)
+- [ ] Frontend receives `library_updated` + scan progress and refreshes automatically
+- [ ] Per-task download progress (bytes streamed) pushed to UI — currently only status transitions are visible
+- [ ] Retry UI for individual failed tasks (whole-purchase redeliver exists; per-track retry does not)
+- [ ] Reconcile-on-boot sweep: mark purchases as `delivered`/`failed` based on queue state at startup
 
-### M5: Packaging + Docs (Week 8)
-- [ ] Multi-arch Docker build (amd64 + arm64 for NAS/Pi users)
-- [ ] Docker Hub / GHCR publishing via CI
-- [ ] User-facing setup docs
-- [ ] iOS app: "Connect Home Server" flow (enter server URL, verify connectivity)
+### M5: Packaging + Docs
+- [ ] s6-overlay service definitions under `docker/s6-rc.d/` (referenced in Go Package Layout, not yet created)
+- [ ] Single-container Dockerfile bundling Navidrome + Bridge Server
+- [ ] Multi-arch Docker build (amd64 + arm64 for NAS/Pi users) via CI
+- [ ] Docker Hub / GHCR publishing pipeline
+- [ ] User-facing setup docs (distinct from `DEV.md` which targets contributors)
+- [ ] iOS app: "Connect Home Server" flow (enter server URL, verify connectivity, persist base URL)
+
+### M6: Storefront Integration (new — tracks the separate RN/web repo)
+- [ ] Define the Supabase→server purchase contract as a stable spec (schema of `purchases`/`purchase_items` + `deliver-purchase` payload) so the RN/web repo can produce rows this server already knows how to consume
+- [ ] Document the `server_id` → user-home-server mapping so Supabase knows which URL to webhook (or which rows a server should poll)
+- [ ] HMAC shared secret provisioning: how a freshly-installed home server registers itself and receives `BRIDGE_WEBHOOK_SECRET`
+- [ ] Stripe webhook → Supabase → home server flow tested end-to-end with a real Stripe test-mode payment (owned by the RN/web repo, but validated against this server)
+- [ ] Remove / feature-flag the dev-mode embedded marketplace UI once the RN app ships
 
 ## Security Considerations
 

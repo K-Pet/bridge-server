@@ -29,7 +29,11 @@ func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue) htt
 
 	// Authenticated Bridge API routes
 	authed := http.NewServeMux()
-	authed.HandleFunc("GET /api/purchases", handlePurchases(cfg))
+	authed.HandleFunc("GET /api/purchases", handlePurchases(cfg, queue))
+	authed.HandleFunc("POST /api/purchases/{id}/redeliver", handleRedeliver(cfg, queue))
+	authed.HandleFunc("GET /api/tracks/{id}/download", handleTrackDownload(cfg))
+	authed.HandleFunc("GET /api/albums/{id}/zip", handleAlbumZip(cfg))
+	authed.HandleFunc("GET /api/entitlements", handleEntitlements(cfg))
 	authed.HandleFunc("GET /api/settings", handleGetSettings(cfg))
 	authed.HandleFunc("POST /api/marketplace/purchase", handleMarketplacePurchase(cfg))
 

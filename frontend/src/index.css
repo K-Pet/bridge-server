@@ -1276,6 +1276,208 @@ h3 {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
+.marketplace-owned-badge {
+  background: #2e7d32;
+}
+
+.marketplace-album-owned .album-cover img,
+.marketplace-album-owned .cover-placeholder {
+  opacity: 0.7;
+}
+
+.marketplace-track-owned {
+  opacity: 0.65;
+}
+
+.track-owned-tag {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #2e7d32;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.purchases-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.purchase-card {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.purchase-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.purchase-card-header .purchase-ref {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.purchase-date {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-top: 0.2rem;
+}
+
+.purchase-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.purchase-total {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.purchase-kind {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.delivery-badge {
+  display: inline-block;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.delivery-badge.delivery-success {
+  background: rgba(46, 125, 50, 0.12);
+  color: #4caf50;
+  border-color: rgba(76, 175, 80, 0.3);
+}
+
+.delivery-badge.delivery-failed {
+  background: rgba(198, 40, 40, 0.12);
+  color: #ef5350;
+  border-color: rgba(239, 83, 80, 0.3);
+}
+
+.delivery-badge.delivery-progress {
+  background: rgba(25, 118, 210, 0.12);
+  color: #64b5f6;
+  border-color: rgba(100, 181, 246, 0.3);
+}
+
+.purchase-item-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.purchase-item-note {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.purchase-card-error {
+  padding: 0.6rem 1rem;
+  background: rgba(198, 40, 40, 0.08);
+  color: #ef5350;
+  font-size: 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+.purchase-items {
+  display: flex;
+  flex-direction: column;
+}
+
+.purchase-item {
+  border-top: 1px solid var(--border);
+}
+
+.purchase-item:first-child {
+  border-top: none;
+}
+
+.purchase-item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.75rem 1rem;
+}
+
+.purchase-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.purchase-item-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.purchase-item-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.purchase-item-price {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.purchase-item-tracks {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0.75rem 0;
+  border-top: 1px dashed var(--border);
+}
+
+.purchase-item-track-row {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr 3.5rem auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.4rem 1rem 0.4rem 2.5rem;
+  font-size: 0.85rem;
+}
+
+.purchase-item-track-num {
+  color: var(--text-tertiary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.purchase-item-track-title {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.purchase-item-track-format {
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+}
+
 .marketplace-track-format {
   width: 60px;
   font-size: 0.75rem;

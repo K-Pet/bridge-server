@@ -25,8 +25,104 @@ export async function getHealth() {
   return apiFetch<{ status: string }>('/api/health')
 }
 
+export interface PurchasedTrack {
+  id: string
+  title: string
+  artist: string
+  format: string | null
+  disc_number: number | null
+  album_index: number | null
+}
+
+export interface PurchaseItem {
+  id: string
+  track_id: string | null
+  album_id: string | null
+  price_cents: number
+  track: (PurchasedTrack & { album_id: string | null }) | null
+  album: {
+    id: string
+    title: string
+    artist: string
+    cover_art_url: string | null
+    tracks: PurchasedTrack[]
+  } | null
+}
+
+export interface DeliverySummary {
+  total: number
+  by_status?: Record<string, number>
+  terminal?: boolean
+  all_complete?: boolean
+  any_failed?: boolean
+  last_error?: string
+}
+
+export interface Purchase {
+  id: string
+  total_cents: number
+  status: string
+  payment_ref: string | null
+  created_at: string
+  purchase_items: PurchaseItem[]
+  delivery?: DeliverySummary
+}
+
 export async function getPurchases() {
-  return apiFetch<unknown[]>('/api/purchases')
+  return apiFetch<Purchase[]>('/api/purchases')
+}
+
+export async function redeliverPurchase(purchaseId: string) {
+  return apiFetch<{ purchase_id: string; status: string; delivery_error: string }>(
+    `/api/purchases/${encodeURIComponent(purchaseId)}/redeliver`,
+    { method: 'POST' }
+  )
+}
+
+export async function getTrackDownloadURL(trackId: string) {
+  return apiFetch<{ url: string; filename: string }>(
+    `/api/tracks/${encodeURIComponent(trackId)}/download`
+  )
+}
+
+// downloadAlbumZip streams the album zip through the bridge-server (which
+// requires our auth header) and triggers a browser download via a blob URL.
+// Holds the whole album in memory for the duration of the download — fine for
+// typical album sizes; revisit if we need to support multi-GB libraries.
+export async function downloadAlbumZip(albumId: string): Promise<void> {
+  const headers = await authHeaders()
+  const res = await fetch(`/api/albums/${encodeURIComponent(albumId)}/zip`, { headers })
+  if (!res.ok) {
+    throw new Error(`API ${res.status}: ${await res.text()}`)
+  }
+  const blob = await res.blob()
+
+  let filename = `album-${albumId}.zip`
+  const dispo = res.headers.get('Content-Disposition') || ''
+  const match = dispo.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)
+  if (match?.[1]) filename = decodeURIComponent(match[1])
+
+  const url = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+export interface Entitlements {
+  album_ids: string[]
+  track_ids: string[]
+}
+
+export async function getEntitlements() {
+  return apiFetch<Entitlements>('/api/entitlements')
 }
 
 export async function getSettings() {
@@ -39,18 +135,37 @@ export interface PurchaseResult {
   delivery_error: string
 }
 
-export async function purchaseAlbum(albumId: string) {
-  return apiFetch<PurchaseResult>('/api/marketplace/purchase', {
+export class AlreadyOwnedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AlreadyOwnedError'
+  }
+}
+
+async function postPurchase(body: Record<string, string>): Promise<PurchaseResult> {
+  const headers = {
+    ...await authHeaders(),
+    'Content-Type': 'application/json',
+  }
+  const res = await fetch('/api/marketplace/purchase', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ album_id: albumId }),
+    headers,
+    body: JSON.stringify(body),
   })
+  if (res.status === 409) {
+    const err = await res.json().catch(() => ({ message: 'Already owned' }))
+    throw new AlreadyOwnedError(err.message || 'Already owned')
+  }
+  if (!res.ok) {
+    throw new Error(`API ${res.status}: ${await res.text()}`)
+  }
+  return res.json()
+}
+
+export async function purchaseAlbum(albumId: string) {
+  return postPurchase({ album_id: albumId })
 }
 
 export async function purchaseTrack(trackId: string) {
-  return apiFetch<PurchaseResult>('/api/marketplace/purchase', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ track_id: trackId }),
-  })
+  return postPurchase({ track_id: trackId })
 }
