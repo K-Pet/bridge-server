@@ -1251,6 +1251,69 @@ h3 {
   font-size: 0.875rem;
 }
 
+.setting-help {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  margin: 0 0 1rem 0;
+}
+
+.pair-code-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pair-code {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  padding: 1rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.pair-code-digit {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text);
+  min-width: 1.25ch;
+  text-align: center;
+}
+
+.pair-code-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.pair-code-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.pair-code-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.pair-expired {
+  margin: 0;
+}
+
+.pair-error {
+  color: var(--red);
+  font-size: 0.85rem;
+  margin: 0.75rem 0 0 0;
+}
+
 /* ==================== Marketplace embed ==================== */
 
 .marketplace-embed {

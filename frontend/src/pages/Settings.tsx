@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { getHealth, getSettings } from '../lib/api'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { generatePairCode, getHealth, getSettings, type PairCode } from '../lib/api'
 
 export default function Settings() {
   const [health, setHealth] = useState<string>('')
@@ -42,6 +42,122 @@ export default function Settings() {
           </div>
         </section>
       )}
+
+      <PairSection />
     </div>
   )
+}
+
+// PairSection — mints a one-shot pair code from POST /api/pair/generate.
+// The code is valid for 5 minutes; the countdown and "expired" state
+// are tracked client-side so we don't need to poll the server.
+function PairSection() {
+  const [code, setCode] = useState<PairCode | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [now, setNow] = useState(Date.now())
+
+  // Re-render once per second so the countdown label updates live.
+  useEffect(() => {
+    if (!code) return
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [code])
+
+  const remaining = useMemo(() => {
+    if (!code) return 0
+    const diff = new Date(code.expires_at).getTime() - now
+    return Math.max(0, Math.floor(diff / 1000))
+  }, [code, now])
+
+  const expired = !!code && remaining <= 0
+
+  const onGenerate = useCallback(async () => {
+    setBusy(true)
+    setErr(null)
+    setCopied(false)
+    try {
+      const next = await generatePairCode()
+      setCode(next)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to generate code')
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
+  const onCopy = useCallback(async () => {
+    if (!code) return
+    try {
+      await navigator.clipboard.writeText(code.code)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // Clipboard write can fail in non-secure contexts; ignore silently.
+    }
+  }, [code])
+
+  return (
+    <section className="settings-section">
+      <h3>Pair marketplace app</h3>
+      <p className="setting-help">
+        Generate a one-shot code, then enter it in the Bridge Music mobile
+        app (Account tab) to link this server as your home server. The
+        marketplace will send purchase webhooks straight to you.
+      </p>
+
+      {code && !expired ? (
+        <div className="pair-code-block">
+          <div className="pair-code" aria-label="pair code">
+            {code.code.split('').map((ch, i) => (
+              <span key={i} className="pair-code-digit">{ch}</span>
+            ))}
+          </div>
+          <div className="pair-code-meta">
+            <span className="setting-label">
+              Expires in {formatSeconds(remaining)}
+            </span>
+            <div className="pair-code-actions">
+              <button type="button" className="btn-secondary" onClick={onCopy}>
+                {copied ? 'Copied!' : 'Copy'}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={onGenerate}
+                disabled={busy}
+              >
+                {busy ? 'Generating…' : 'New code'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="pair-code-empty">
+          {expired && (
+            <p className="setting-help pair-expired">
+              The previous code has expired. Generate a new one to pair.
+            </p>
+          )}
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={onGenerate}
+            disabled={busy}
+          >
+            {busy ? 'Generating…' : 'Generate pair code'}
+          </button>
+        </div>
+      )}
+
+      {err && <p className="pair-error">{err}</p>}
+    </section>
+  )
+}
+
+function formatSeconds(sec: number): string {
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
 }

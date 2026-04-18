@@ -129,6 +129,16 @@ export async function getSettings() {
   return apiFetch<{ delivery_mode: string; poll_interval: string }>('/api/settings')
 }
 
+export interface PairCode {
+  code: string
+  expires_at: string
+  ttl_sec: number
+}
+
+export async function generatePairCode() {
+  return apiFetch<PairCode>('/api/pair/generate', { method: 'POST' })
+}
+
 export interface BridgeEvent {
   type: string
   purchase_id?: string
