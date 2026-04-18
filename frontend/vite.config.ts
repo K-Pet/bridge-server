@@ -6,11 +6,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:8080',
-      '/rest': 'http://localhost:8080',
-      '/nd': 'http://localhost:8080',
+      '/api': 'http://localhost:8088',
+      '/rest': 'http://localhost:8088',
+      '/nd': 'http://localhost:8088',
       '/ws': {
-        target: 'ws://localhost:8080',
+        target: 'ws://localhost:8088',
         ws: true,
       },
     },

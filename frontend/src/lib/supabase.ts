@@ -4,6 +4,7 @@ export interface AppConfig {
   supabase_url: string
   supabase_anon_key: string
   dev_mode: boolean
+  marketplace_url: string
 }
 
 let _supabase: SupabaseClient | null = null

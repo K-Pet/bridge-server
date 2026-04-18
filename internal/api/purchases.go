@@ -737,6 +737,7 @@ func handleConfig(cfg *config.Config) http.HandlerFunc {
 			"supabase_url":      cfg.SupabaseURL,
 			"supabase_anon_key": cfg.SupabaseAnonKey,
 			"dev_mode":          cfg.DevMode,
+			"marketplace_url":   cfg.MarketplaceURL,
 		})
 	}
 }

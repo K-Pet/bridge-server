@@ -1251,51 +1251,109 @@ h3 {
   font-size: 0.875rem;
 }
 
-/* ==================== Marketplace ==================== */
+/* ==================== Marketplace embed ==================== */
 
-.marketplace-page {
-  max-width: 1000px;
+.marketplace-embed {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  height: 100%;
+  min-height: 0;
 }
 
-.marketplace-album-card {
-  font-family: inherit;
-  cursor: pointer;
-  text-align: left;
+.marketplace-embed-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
-.marketplace-price-badge {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: var(--secondary);
-  color: #fff;
-  font-size: 0.75rem;
-  font-weight: 700;
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+.marketplace-embed-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
 }
 
-.marketplace-owned-badge {
-  background: #2e7d32;
-}
-
-.marketplace-album-owned .album-cover img,
-.marketplace-album-owned .cover-placeholder {
-  opacity: 0.7;
-}
-
-.marketplace-track-owned {
-  opacity: 0.65;
-}
-
-.track-owned-tag {
-  display: inline-block;
+.marketplace-embed-eyebrow {
   font-size: 0.7rem;
-  font-weight: 600;
-  color: #2e7d32;
+  font-weight: 700;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.marketplace-embed-title h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.marketplace-embed-frame {
+  position: relative;
+  flex: 1;
+  min-height: 480px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  background:
+    radial-gradient(1200px 320px at 10% -10%, var(--accent-soft), transparent 60%),
+    var(--bg-raised);
+  box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.6);
+}
+
+.marketplace-embed-iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color-scheme: dark;
+  opacity: 1;
+  transition: opacity 0.25s ease;
+}
+
+.marketplace-embed-iframe.is-loading {
+  opacity: 0;
+}
+
+.marketplace-embed-loader,
+.marketplace-embed-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 2rem;
+  pointer-events: none;
+}
+
+.marketplace-embed-error {
+  pointer-events: auto;
+  color: var(--red);
+}
+
+.marketplace-embed-error strong {
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.marketplace-embed-hint {
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+}
+
+.marketplace-embed-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg-hover);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  color: var(--text-secondary);
 }
 
 .purchases-list {
@@ -1476,70 +1534,6 @@ h3 {
   font-size: 0.7rem;
   color: var(--text-tertiary);
   text-transform: uppercase;
-}
-
-.marketplace-track-format {
-  width: 60px;
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-  flex-shrink: 0;
-}
-
-.marketplace-track-price {
-  width: 60px;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  text-align: right;
-  flex-shrink: 0;
-}
-
-.marketplace-track-action {
-  width: 60px;
-  flex-shrink: 0;
-  text-align: right;
-}
-
-.marketplace-track-row {
-  cursor: default;
-}
-
-.btn-buy-track {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-  font-size: 0.75rem;
-  font-weight: 500;
-  padding: 0.2rem 0.6rem;
-  border-radius: 4px;
-  cursor: pointer;
-  font-family: inherit;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.btn-buy-track:hover {
-  background: var(--secondary);
-  border-color: var(--secondary);
-  color: #fff;
-}
-
-.btn-buy-track:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.marketplace-purchases {
-  margin-top: 3rem;
-}
-
-.marketplace-purchases h3 {
-  margin-top: 0;
-}
-
-.marketplace-purchases-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.75rem;
 }
 
 .btn-sm {

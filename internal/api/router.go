@@ -41,7 +41,6 @@ func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue, hub
 	authed.HandleFunc("GET /api/albums/{id}/zip", handleAlbumZip(cfg))
 	authed.HandleFunc("GET /api/entitlements", handleEntitlements(cfg))
 	authed.HandleFunc("GET /api/settings", handleGetSettings(cfg))
-	authed.HandleFunc("POST /api/marketplace/purchase", handleMarketplacePurchase(cfg))
 
 	var authMiddleware func(http.Handler) http.Handler
 	if cfg.DevMode {

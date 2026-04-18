@@ -33,6 +33,13 @@ type Config struct {
 	// DevMode disables Supabase auth requirements for local development.
 	// Set BRIDGE_DEV=true to enable.
 	DevMode bool
+
+	// MarketplaceURL is the origin where the Bridge Music Marketplace (Expo
+	// web bundle) is served. The embedded SPA iframes this URL for the
+	// storefront tab. In prod we mount the exported Expo web bundle at
+	// /marketplace/ on this same server; in dev it typically points at
+	// http://localhost:8081 (the expo metro web dev server).
+	MarketplaceURL string
 }
 
 func Load() (*Config, error) {
@@ -52,6 +59,7 @@ func Load() (*Config, error) {
 		SupabaseServiceKey: envStr("BRIDGE_SUPABASE_SERVICE_KEY", ""),
 		SupabaseJWTSecret:  envStr("BRIDGE_SUPABASE_JWT_SECRET", ""),
 		WebhookSecret:      envStr("BRIDGE_WEBHOOK_SECRET", ""),
+		MarketplaceURL:     envStr("BRIDGE_MARKETPLACE_URL", "/marketplace/"),
 	}
 
 	if !cfg.DevMode {

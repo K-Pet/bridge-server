@@ -15,6 +15,23 @@ brew install supabase/tap/supabase
 curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash
 ```
 
+## Repo split (2026-04-17)
+
+The Supabase schema, Edge Functions, and seed script now live in the
+sibling [`Bridge-Music-Marketplace`](https://github.com/bridge-music/Bridge-Music-Marketplace)
+repo. This repo no longer owns `supabase/`. To bring the full stack up:
+
+```bash
+# Terminal A — marketplace (owns Supabase + storefront)
+cd ~/OtherProjects/Bridge-Music-Marketplace && tilt up
+
+# Terminal B — this repo (Navidrome + Go API)
+cd ~/OtherProjects/bridge-server && tilt up
+```
+
+The bridge-server Tiltfile health-checks `:54321` on startup and refuses
+to bring up the Go server until the marketplace stack is reachable.
+
 ## Quick Start
 
 ```bash
@@ -24,26 +41,23 @@ cd frontend && npm install && cd ..
 # 2. Create local data directories
 mkdir -p data/music data/navidrome data/bridge
 
-# 3. Start local Supabase (auth, DB, storage)
-supabase start --exclude logflare,vector
+# 3. Start the marketplace Supabase stack first (owns the schema + seeds)
+cd ~/OtherProjects/Bridge-Music-Marketplace && tilt up &
+#    Wait until supabase-seed reports "Seed complete" in the Tilt UI.
 
-# 4. Seed the marketplace (first time only — creates catalog, test user, uploads audio)
-supabase db reset
-./supabase/seed.sh
-
-# 5. Start everything
-tilt up
+# 4. Start everything in this repo
+cd ~/OtherProjects/bridge-server && tilt up
 ```
 
 This launches four services:
 
 | Service | URL | What it does |
 |---------|-----|-------------|
-| **Supabase** | `http://localhost:54321` | Auth, DB, Storage (run separately) |
+| **Supabase** | `http://localhost:54321` | Auth, DB, Storage — managed by the **marketplace** Tiltfile |
 | **Supabase Studio** | `http://localhost:54323` | Database admin UI |
 | **Navidrome** | `http://localhost:4533` | Music engine (Docker) |
 | **Bridge Server** | `http://localhost:8080` | Go API backend |
-| **Frontend** | `http://localhost:5173` | React dev server with HMR |
+| **Frontend** | `http://localhost:5173` | React dev server with HMR (legacy internal UI) |
 
 Open **http://localhost:5173** in your browser for the frontend.
 
@@ -129,10 +143,13 @@ frontend/
 
 ### Local Supabase for Auth + Marketplace
 
-The local Supabase instance handles auth, the marketplace catalog, and purchase storage.
-Credentials are loaded from `.env.local` (gitignored) and injected by the Tiltfile.
+The local Supabase instance handles auth, the marketplace catalog, and
+purchase storage. It is owned and managed by the sibling
+`Bridge-Music-Marketplace` repo — this repo connects to `:54321` but
+does not bring it up. Credentials are loaded from `.env.local`
+(gitignored) and injected by the Tiltfile.
 
-Test login credentials (created by `./supabase/seed.sh`):
+Test login credentials (created by `Bridge-Music-Marketplace/supabase/seed.sh`):
 - **Email:** `test@bridge.music`
 - **Password:** `testpass123`
 
