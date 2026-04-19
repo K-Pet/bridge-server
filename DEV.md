@@ -32,6 +32,12 @@ cd ~/OtherProjects/bridge-server && tilt up
 The bridge-server Tiltfile health-checks `:54321` on startup and refuses
 to bring up the Go server until the marketplace stack is reachable.
 
+**For change-by-change walkthroughs** (adding an endpoint, admin page,
+or Go package), see
+[`../Bridge-Music-Marketplace/docs/CONTRIBUTING.md § 5`](../Bridge-Music-Marketplace/docs/CONTRIBUTING.md#5-recipes--bridge-server-home-server).
+The marketplace's `CONTRIBUTING.md` is the canonical onboarding guide
+for both repos.
+
 ## Quick Start
 
 ```bash
