@@ -29,6 +29,11 @@ type Track struct {
 	DownloadURL string `json:"download_url"`
 	SizeBytes   int64  `json:"size_bytes"`
 	SHA256      string `json:"sha256"`
+	// AlbumArtURL is the public (cache-busted) cover-art URL set by
+	// publish-draft.  The downloader writes it to
+	// `<album_dir>/cover.<ext>` so Navidrome indexes album art.  Empty
+	// when a track was purchased without accompanying cover art.
+	AlbumArtURL string `json:"album_art_url,omitempty"`
 }
 
 type DownloadTask struct {

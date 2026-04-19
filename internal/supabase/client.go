@@ -45,6 +45,7 @@ type purchaseTrackRow struct {
 	StoragePath    string  `json:"storage_path"`
 	SizeBytes      int64   `json:"size_bytes"`
 	SHA256         string  `json:"sha256"`
+	AlbumArtURL    *string `json:"album_art_url"`
 }
 
 // FetchPendingPurchases returns purchases targeted at this server that the
@@ -117,6 +118,9 @@ func (c *Client) FetchPendingPurchases(ctx context.Context, serverID string) ([]
 			DownloadURL: signed,
 			SizeBytes:   r.SizeBytes,
 			SHA256:      r.SHA256,
+		}
+		if r.AlbumArtURL != nil {
+			track.AlbumArtURL = *r.AlbumArtURL
 		}
 		if p, ok := byPurchase[r.PurchaseID]; ok {
 			p.Tracks = append(p.Tracks, track)

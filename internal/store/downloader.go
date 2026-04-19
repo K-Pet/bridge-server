@@ -8,7 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -191,9 +193,112 @@ func (d *Downloader) process(ctx context.Context, task *DownloadTask) error {
 		return fmt.Errorf("move to final path: %w", err)
 	}
 
+	// Drop the album cover next to the tracks so Navidrome indexes it.
+	// Non-fatal: album art is a nice-to-have, and an audio file we
+	// already wrote shouldn't get rolled back because a cover 404'd.
+	if track.AlbumArtURL != "" {
+		if err := d.ensureCoverArt(ctx, finalDir, track.AlbumArtURL); err != nil {
+			slog.Warn("cover art download failed", "task", task.ID, "album", track.Album, "error", err)
+		}
+	}
+
 	d.queue.UpdateStatus(task.ID, StatusWritten, "")
 	d.publish("task_status", task.PurchaseID, task.ID, string(StatusWritten), map[string]any{"bytes": written})
 	return nil
+}
+
+// ensureCoverArt writes the album cover to `<albumDir>/cover.<ext>` if
+// one is not already present.  Called after every track write, but a
+// quick stat on the sidecar skips the download when the file already
+// exists — subsequent tracks in the same album are cheap no-ops.
+//
+// `coverURL` is the public URL publish-draft put on tracks.album_art_url
+// (cache-busted with `?v=<ms>`).  We extract the extension from the
+// path portion, falling back to `jpg`.
+func (d *Downloader) ensureCoverArt(ctx context.Context, albumDir, coverURL string) error {
+	ext := coverExtensionFromURL(coverURL)
+	coverPath := filepath.Join(albumDir, "cover."+ext)
+
+	// If any supported cover file already exists in this directory, bail.
+	// Handles both the re-download-for-this-album case and the case where
+	// Navidrome already picked up a different extension (jpeg → jpg).
+	for _, candidate := range coverCandidates(albumDir) {
+		if _, err := os.Stat(candidate); err == nil {
+			return nil
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", coverURL, nil)
+	if err != nil {
+		return fmt.Errorf("cover request: %w", err)
+	}
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("cover fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("cover fetch status %d", resp.StatusCode)
+	}
+
+	// Stage and rename so we don't leave a half-written cover behind.
+	staging := coverPath + ".part"
+	f, err := os.Create(staging)
+	if err != nil {
+		return fmt.Errorf("create cover file: %w", err)
+	}
+	// Cap at 8 MiB — we shipped this ourselves as a compressed 1024×1024
+	// JPEG, so anything larger is suspicious.
+	const maxCoverBytes = 8 * 1024 * 1024
+	_, copyErr := io.Copy(f, io.LimitReader(resp.Body, maxCoverBytes+1))
+	closeErr := f.Close()
+	if copyErr != nil {
+		os.Remove(staging)
+		return fmt.Errorf("write cover: %w", copyErr)
+	}
+	if closeErr != nil {
+		os.Remove(staging)
+		return fmt.Errorf("close cover: %w", closeErr)
+	}
+	if err := os.Rename(staging, coverPath); err != nil {
+		os.Remove(staging)
+		return fmt.Errorf("rename cover: %w", err)
+	}
+	slog.Info("cover art written", "path", coverPath)
+	return nil
+}
+
+// coverExtensionFromURL pulls the extension off the path component,
+// ignoring the query string.  Defaults to `jpg` for unrecognised inputs.
+func coverExtensionFromURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "jpg"
+	}
+	ext := strings.ToLower(strings.TrimPrefix(path.Ext(u.Path), "."))
+	switch ext {
+	case "jpg", "jpeg":
+		return "jpg"
+	case "png", "webp":
+		return ext
+	default:
+		return "jpg"
+	}
+}
+
+// coverCandidates enumerates the filenames Navidrome recognises as
+// album cover art.  We skip the download when any of them exist to
+// keep re-delivery / multi-track-album runs idempotent.
+func coverCandidates(albumDir string) []string {
+	names := []string{
+		"cover.jpg", "cover.jpeg", "cover.png", "cover.webp",
+		"folder.jpg", "folder.jpeg", "folder.png",
+	}
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = filepath.Join(albumDir, n)
+	}
+	return out
 }
 
 var unsafeChars = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]`)
