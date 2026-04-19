@@ -24,6 +24,18 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Webhook is the idempotent entry point for this purchase — users can
+	// retry delivery from the marketplace UI and re-fire this exact payload.
+	// The queue's task primary key is "<purchase_id>:<track_id>", so a
+	// second delivery would hit a UNIQUE violation on every track insert
+	// and surface as a 500 back to the caller.  Clear previous attempts
+	// first so retries start from a clean queued state.
+	if err := h.queue.DeleteTasksForPurchase(purchase.ID); err != nil {
+		slog.Error("failed to reset prior tasks", "purchase", purchase.ID, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	for _, track := range purchase.Tracks {
 		if err := h.queue.Enqueue(purchase.ID, track); err != nil {
 			slog.Error("failed to enqueue track", "purchase", purchase.ID, "track", track.TrackID, "error", err)
