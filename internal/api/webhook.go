@@ -24,8 +24,25 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Webhook is the idempotent entry point for this purchase — users can
-	// retry delivery from the marketplace UI and re-fire this exact payload.
+	// Idempotency guard.  The webhook is the marketplace's push entry
+	// point but the marketplace also lets users retry delivery, and
+	// Stripe's at-least-once retry semantics mean we may see the same
+	// purchase twice on a network blip.  If every task for this purchase
+	// already finished successfully, swallow the re-delivery — otherwise
+	// we'd re-download files we already placed on disk and re-run the
+	// Navidrome scan for nothing.  Partial-failure purchases still get
+	// reset so the artist can actually use the retry button.
+	summaries, err := h.queue.SummariesForPurchases([]string{purchase.ID})
+	if err != nil {
+		slog.Warn("idempotency check failed, proceeding", "purchase", purchase.ID, "error", err)
+	} else if s, ok := summaries[purchase.ID]; ok && s.Total > 0 && s.AllComplete {
+		slog.Info("webhook replay for completed purchase — no-op",
+			"purchase", purchase.ID, "tracks", s.Total)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "already_delivered"})
+		return
+	}
+
 	// The queue's task primary key is "<purchase_id>:<track_id>", so a
 	// second delivery would hit a UNIQUE violation on every track insert
 	// and surface as a 500 back to the caller.  Clear previous attempts
