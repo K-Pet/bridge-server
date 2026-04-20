@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/bridgemusic/bridge-server/internal/config"
 	"github.com/bridgemusic/bridge-server/internal/store"
@@ -22,6 +23,24 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("webhook verification failed", "error", err)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
+	}
+
+	// Replay protection: reject payloads with a timestamp older than
+	// MaxWebhookAge.  The timestamp is inside the HMAC-signed body so it
+	// can't be tampered with.  Missing timestamp is tolerated during the
+	// rollout window (old deliver-purchase versions don't emit it).
+	if purchase.Timestamp != "" {
+		ts, err := time.Parse(time.RFC3339Nano, purchase.Timestamp)
+		if err != nil {
+			slog.Warn("webhook has unparseable timestamp", "raw", purchase.Timestamp)
+			http.Error(w, "invalid timestamp", http.StatusBadRequest)
+			return
+		}
+		if time.Since(ts) > store.MaxWebhookAge {
+			slog.Warn("webhook replay rejected", "purchase", purchase.ID, "age", time.Since(ts))
+			http.Error(w, "webhook too old", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	// Idempotency guard.  The webhook is the marketplace's push entry

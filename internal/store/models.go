@@ -14,11 +14,16 @@ const (
 )
 
 type Purchase struct {
-	ID          string  `json:"purchase_id"`
-	UserID      string  `json:"user_id"`
-	Tracks      []Track `json:"tracks"`
-	Signature   string  `json:"signature"`
+	ID        string  `json:"purchase_id"`
+	UserID    string  `json:"user_id"`
+	Tracks    []Track `json:"tracks"`
+	Signature string  `json:"signature"`
+	// Timestamp is set by deliver-purchase for replay protection.
+	// bridge-server rejects payloads older than MaxWebhookAge.
+	Timestamp string `json:"timestamp,omitempty"`
 }
+
+const MaxWebhookAge = 5 * time.Minute
 
 type Track struct {
 	TrackID     string `json:"track_id"`
