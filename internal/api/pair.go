@@ -37,13 +37,16 @@ import (
 )
 
 const (
-	pairCodeTTL = 5 * time.Minute
-	pairCodeLen = 6
+	pairCodeTTL     = 5 * time.Minute
+	pairCodeLen     = 6
+	pairMaxAttempts = 5
+	pairFailDelay   = 500 * time.Millisecond
 )
 
 type pairCode struct {
 	code      string
 	expiresAt time.Time
+	attempts  int
 }
 
 type pairStore struct {
@@ -70,6 +73,9 @@ func (s *pairStore) mint() (string, time.Time, error) {
 // consume returns true iff `code` matches the current pending code AND
 // hasn't expired.  On match the code is cleared so a second redemption
 // fails — one-shot by construction.
+//
+// Brute-force protection: after pairMaxAttempts wrong guesses the code is
+// burned and the owner must generate a new one.
 func (s *pairStore) consume(code string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -81,6 +87,10 @@ func (s *pairStore) consume(code string) bool {
 		return false
 	}
 	if s.code.code != code {
+		s.code.attempts++
+		if s.code.attempts >= pairMaxAttempts {
+			s.code = nil // burned — too many wrong guesses
+		}
 		return false
 	}
 	s.code = nil
@@ -121,7 +131,8 @@ func handleGeneratePairCode() http.HandlerFunc {
 
 // handlePairExchange — unauthenticated (the marketplace doesn't have a
 // JWT for this home server yet).  Security comes from the one-shot
-// random code: without knowing it you can't redeem.
+// random code + attempt limiting: without knowing the code you can't
+// redeem, and after 5 wrong guesses the code is burned.
 func handlePairExchange(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
@@ -130,6 +141,9 @@ func handlePairExchange(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 		if !pair.consume(code) {
+			// Throttle brute-force attempts — caps throughput at ~2 req/s
+			// even under parallel connections.
+			time.Sleep(pairFailDelay)
 			writeJSONError(w, http.StatusUnauthorized, "invalid_code", "pair code is missing, wrong, or expired")
 			return
 		}
