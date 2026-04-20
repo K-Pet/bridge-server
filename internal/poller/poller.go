@@ -55,6 +55,18 @@ func (p *Poller) poll(ctx context.Context) {
 	}
 
 	for _, purchase := range purchases {
+		// Idempotency: if the webhook already delivered this purchase (all
+		// tasks completed locally), skip it — avoids overwriting a terminal
+		// "delivered" status back to "delivering".
+		summaries, err := p.queue.SummariesForPurchases([]string{purchase.ID})
+		if err == nil {
+			if s, ok := summaries[purchase.ID]; ok && s.Total > 0 && s.AllComplete {
+				slog.Info("poll: purchase already complete locally, skipping",
+					"purchase", purchase.ID, "tracks", s.Total)
+				continue
+			}
+		}
+
 		for _, track := range purchase.Tracks {
 			if err := p.queue.Enqueue(purchase.ID, track); err != nil {
 				slog.Error("failed to enqueue from poll", "purchase", purchase.ID, "error", err)
