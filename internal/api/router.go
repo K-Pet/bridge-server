@@ -24,12 +24,6 @@ func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue, hub
 	// initialise auth at runtime without baking credentials into the JS build.
 	mux.HandleFunc("GET /api/config", handleConfig(cfg))
 
-	// Live event stream (SSE). Unauthenticated for now — in production this
-	// should sit behind the same auth middleware as the rest of /api/*.
-	if hub != nil {
-		mux.HandleFunc("GET /api/events", handleEvents(hub))
-	}
-
 	// Webhook endpoint (authenticated via signature, not JWT)
 	mux.Handle("POST /api/webhook/purchase", &webhookHandler{cfg: cfg, queue: queue, hub: hub})
 
@@ -40,6 +34,9 @@ func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue, hub
 
 	// Authenticated Bridge API routes
 	authed := http.NewServeMux()
+	if hub != nil {
+		authed.HandleFunc("GET /api/events", handleEvents(hub))
+	}
 	authed.HandleFunc("GET /api/purchases", handlePurchases(cfg, queue))
 	authed.HandleFunc("POST /api/purchases/{id}/redeliver", handleRedeliver(cfg, queue))
 	authed.HandleFunc("GET /api/tracks/{id}/download", handleTrackDownload(cfg))

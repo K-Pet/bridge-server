@@ -73,6 +73,16 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("BRIDGE_SERVER_ID is required in poll mode")
 		}
 	}
+	// Safety net: refuse to start in dev mode when real Supabase credentials
+	// are present — this catches accidental BRIDGE_DEV=true in production
+	// deployments.  Override with BRIDGE_ALLOW_DEV_AUTH=true if intentional.
+	if cfg.DevMode && cfg.SupabaseJWTSecret != "" && envStr("BRIDGE_ALLOW_DEV_AUTH", "") != "true" {
+		return nil, fmt.Errorf(
+			"BRIDGE_DEV=true but BRIDGE_SUPABASE_JWT_SECRET is set — this looks like a " +
+				"production deployment with dev auth enabled. Refusing to start. " +
+				"Set BRIDGE_ALLOW_DEV_AUTH=true to override",
+		)
+	}
 	if cfg.DevMode && cfg.ServerID == "" {
 		cfg.ServerID = "local-dev"
 	}

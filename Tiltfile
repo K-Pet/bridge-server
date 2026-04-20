@@ -49,6 +49,7 @@ local_resource(
     "bridge-server",
     serve_cmd=" ".join([
         "BRIDGE_DEV=true",
+        "BRIDGE_ALLOW_DEV_AUTH=true",
         "BRIDGE_PORT=8088",
         "BRIDGE_DATA=./data/bridge",
         "BRIDGE_MUSIC_DIR=./data/music",
