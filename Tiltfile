@@ -49,7 +49,6 @@ local_resource(
     "bridge-server",
     serve_cmd=" ".join([
         "BRIDGE_DEV=true",
-        "BRIDGE_ALLOW_DEV_AUTH=true",
         "BRIDGE_PORT=8088",
         "BRIDGE_DATA=./data/bridge",
         "BRIDGE_MUSIC_DIR=./data/music",
@@ -64,6 +63,11 @@ local_resource(
         # URL the embedded SPA iframes for the Storefront tab. In dev this is
         # the Expo web metro server (see Bridge-Music-Marketplace/Tiltfile).
         "BRIDGE_MARKETPLACE_URL=" + env.get("BRIDGE_MARKETPLACE_URL", "http://localhost:8081"),
+        # External URL for auto-pairing during onboarding. In dev, the
+        # bridge-server runs on :8088 but Edge Functions call from Docker,
+        # so use host.docker.internal for reachability.
+        "BRIDGE_EXTERNAL_URL=" + env.get("BRIDGE_EXTERNAL_URL", "http://host.docker.internal:8088"),
+        "BRIDGE_LABEL=" + env.get("BRIDGE_LABEL", "Local-Dev-Server"),
         "go", "run", "./cmd/bridge-server",
     ]),
     deps=[
