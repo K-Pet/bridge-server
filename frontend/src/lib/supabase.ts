@@ -5,6 +5,9 @@ export interface AppConfig {
   supabase_anon_key: string
   dev_mode: boolean
   marketplace_url: string
+  // Dev-only: test credentials for auto-sign-in (never present in prod).
+  dev_email?: string
+  dev_password?: string
 }
 
 let _supabase: SupabaseClient | null = null

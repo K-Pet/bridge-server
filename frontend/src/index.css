@@ -283,6 +283,61 @@ body {
   margin-bottom: 1.5rem;
 }
 
+/* Auth tabs (login/signup toggle) */
+.auth-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.auth-tab {
+  flex: 1;
+  padding: 0.5rem;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.auth-tab + .auth-tab {
+  border-left: 1px solid var(--border);
+}
+
+.auth-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.auth-tab.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.auth-switch-btn {
+  display: block;
+  width: 100%;
+  margin-top: 1rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.6rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.auth-switch-btn:hover {
+  background: var(--accent-hover);
+}
+
 .login-card form {
   display: flex;
   flex-direction: column;
@@ -782,6 +837,11 @@ h3 {
   font-size: 0.85rem;
   margin-bottom: 1.5rem;
   transition: color 0.15s;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
 }
 
 .back-link:hover {
@@ -1679,6 +1739,193 @@ h3 {
 .status-delivered {
   background: var(--green-bg);
   color: var(--green);
+}
+
+/* ==================== Onboarding ==================== */
+
+.onboarding-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem;
+}
+
+.onboarding-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2.5rem;
+  width: 100%;
+  max-width: 440px;
+  text-align: center;
+}
+
+.onboarding-brand {
+  font-size: 1.1rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  color: var(--text);
+}
+
+.onboarding-brand .brand-icon {
+  width: 28px;
+  height: 28px;
+  filter: brightness(0) saturate(100%) invert(55%) sepia(92%) saturate(1500%) hue-rotate(170deg) brightness(104%) contrast(104%);
+}
+
+.onboarding-progress {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-bottom: 2rem;
+}
+
+.progress-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background 0.2s, transform 0.2s;
+}
+
+.progress-dot.done {
+  background: var(--accent);
+}
+
+.progress-dot.active {
+  background: var(--accent);
+  transform: scale(1.3);
+}
+
+.onboarding-card h2 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.02em;
+}
+
+.onboarding-subtitle {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  margin-bottom: 1.5rem;
+}
+
+.onboarding-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  text-align: left;
+}
+
+.onboarding-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.onboarding-label .optional {
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+.onboarding-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
+.onboarding-spinner {
+  display: flex;
+  justify-content: center;
+  padding: 2rem 0;
+}
+
+.onboarding-success-icon {
+  margin-bottom: 1rem;
+}
+
+/* ==================== Delete Buttons ==================== */
+
+/* Small inline delete icon — used in album cards and song rows */
+.btn-delete-sm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.btn-delete-sm:hover {
+  color: var(--red);
+  background: var(--red-bg);
+}
+
+.btn-delete-sm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Full delete button — used in album detail actions */
+.btn-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 0.6rem 1.25rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.btn-delete:hover {
+  color: var(--red);
+  border-color: rgba(248, 113, 113, 0.3);
+  background: var(--red-bg);
+}
+
+.btn-delete:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Title row with inline delete on album cards */
+.card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+}
+
+.card-title-row .card-title {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Spacer for the song row delete column header */
+.song-actions-header {
+  width: 28px;
+  flex-shrink: 0;
 }
 
 /* ==================== Responsive ==================== */

@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { getAlbum, coverArtUrl, formatDuration, formatDurationLong, type Album, type Song } from '../lib/subsonic'
+import { deleteSong, deleteAlbum } from '../lib/api'
 import { usePlayer } from '../context/PlayerContext'
 
 export default function AlbumDetail() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const [album, setAlbum] = useState<Album | null>(null)
   const [songs, setSongs] = useState<Song[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [deletingAlbum, setDeletingAlbum] = useState(false)
+  const [deletingSong, setDeletingSong] = useState<string | null>(null)
   const { playSong, playAlbum, currentSong, isPlaying } = usePlayer()
 
   useEffect(() => {
@@ -23,6 +27,33 @@ export default function AlbumDetail() {
       .finally(() => setLoading(false))
   }, [id])
 
+  async function handleDeleteAlbum() {
+    if (!album || !id) return
+    if (!confirm(`Delete "${album.name}" by ${album.artist}? This removes all files from your library.`)) return
+    setDeletingAlbum(true)
+    try {
+      await deleteAlbum(id)
+      navigate('/')
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Delete failed')
+      setDeletingAlbum(false)
+    }
+  }
+
+  async function handleDeleteSong(e: React.MouseEvent, song: Song) {
+    e.stopPropagation()
+    if (!confirm(`Delete "${song.title}" by ${song.artist}?`)) return
+    setDeletingSong(song.id)
+    try {
+      await deleteSong(song.id)
+      setSongs(prev => prev.filter(s => s.id !== song.id))
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Delete failed')
+    } finally {
+      setDeletingSong(null)
+    }
+  }
+
   if (loading) return <div className="loading">Loading album...</div>
   if (error) return <div className="error-page">Error: {error}</div>
   if (!album) return <div className="error-page">Album not found</div>
@@ -35,10 +66,10 @@ export default function AlbumDetail() {
 
   return (
     <div className="detail-page">
-      <Link to={`/artist/${album.artistId}`} className="back-link">
+      <button className="back-link" onClick={() => navigate(-1)}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        {album.artist}
-      </Link>
+        Back
+      </button>
 
       <div className="album-hero">
         <div className="album-hero-cover">
@@ -70,6 +101,15 @@ export default function AlbumDetail() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 3 21 3 21 8" /><line x1="4" y1="20" x2="21" y2="3" /><polyline points="21 16 21 21 16 21" /><line x1="15" y1="15" x2="21" y2="21" /><line x1="4" y1="4" x2="9" y2="9" /></svg>
               Shuffle
             </button>
+            <button
+              className="btn-delete"
+              onClick={handleDeleteAlbum}
+              disabled={deletingAlbum}
+              title="Delete album from library"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+              {deletingAlbum ? 'Deleting...' : 'Delete'}
+            </button>
           </div>
         </div>
       </div>
@@ -81,6 +121,7 @@ export default function AlbumDetail() {
           <span className="song-duration">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
           </span>
+          <span className="song-actions-header" />
         </div>
         {isMultiDisc
           ? discNumbers.flatMap(disc => {
@@ -111,6 +152,19 @@ export default function AlbumDetail() {
                         <span className="song-title">{song.title}</span>
                       </div>
                       <span className="song-duration">{formatDuration(song.duration)}</span>
+                      <span
+                        className="btn-delete-sm"
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => handleDeleteSong(e, song)}
+                        title={`Delete ${song.title}`}
+                      >
+                        {deletingSong === song.id ? (
+                          <span className="spinner-sm" />
+                        ) : (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                        )}
+                      </span>
                     </button>
                   )
                 }),
@@ -137,6 +191,19 @@ export default function AlbumDetail() {
                     <span className="song-title">{song.title}</span>
                   </div>
                   <span className="song-duration">{formatDuration(song.duration)}</span>
+                  <span
+                    className="btn-delete-sm"
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => handleDeleteSong(e, song)}
+                    title={`Delete ${song.title}`}
+                  >
+                    {deletingSong === song.id ? (
+                      <span className="spinner-sm" />
+                    ) : (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                    )}
+                  </span>
                 </button>
               )
             })}

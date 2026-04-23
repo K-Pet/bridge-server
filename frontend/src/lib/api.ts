@@ -9,11 +9,15 @@ async function authHeaders(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${token}` }
 }
 
-export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = {
-    ...await authHeaders(),
-    ...init?.headers,
+export async function apiFetch<T>(path: string, init?: RequestInit & { token?: string }): Promise<T> {
+  // Allow callers to pass an explicit token (avoids getSession() race after sign-in)
+  let hdrs: Record<string, string>
+  if (init?.token) {
+    hdrs = { Authorization: `Bearer ${init.token}` }
+  } else {
+    hdrs = await authHeaders()
   }
+  const headers = { ...hdrs, ...init?.headers }
   const res = await fetch(path, { ...init, headers })
   if (!res.ok) {
     throw new Error(`API ${res.status}: ${await res.text()}`)
@@ -116,6 +120,20 @@ export async function downloadAlbumZip(albumId: string): Promise<void> {
   }
 }
 
+export async function deleteSong(songId: string) {
+  return apiFetch<{ deleted: boolean; song_id: string; scanning: boolean }>(
+    `/api/library/songs/${encodeURIComponent(songId)}`,
+    { method: 'DELETE' }
+  )
+}
+
+export async function deleteAlbum(albumId: string) {
+  return apiFetch<{ deleted: boolean; album_id: string; song_count: number; scanning: boolean }>(
+    `/api/library/albums/${encodeURIComponent(albumId)}`,
+    { method: 'DELETE' }
+  )
+}
+
 export interface Entitlements {
   album_ids: string[]
   track_ids: string[]
@@ -139,6 +157,35 @@ export async function generatePairCode() {
   return apiFetch<PairCode>('/api/pair/generate', { method: 'POST' })
 }
 
+// ── Onboarding ──────────────────────────────────────────────────────
+
+export interface OnboardingStatus {
+  profile_complete: boolean
+  server_paired: boolean
+  auto_pair_available: boolean
+  profile: { id: string; username: string | null; full_name: string | null; avatar_url: string | null } | null
+  server: { id: string; label: string; server_id: string | null; webhook_url: string } | null
+}
+
+export async function getOnboardingStatus(token?: string) {
+  return apiFetch<OnboardingStatus>('/api/onboarding/status', token ? { token } : undefined)
+}
+
+export interface AutoPairResult {
+  paired: boolean
+  server: { id: string; label: string; server_id: string | null; webhook_url: string }
+}
+
+export async function autoPair(token?: string) {
+  return apiFetch<AutoPairResult>('/api/auto-pair', { method: 'POST', token })
+}
+
+export async function getPairStatus() {
+  return apiFetch<{ paired: boolean; server: any }>('/api/pair/status')
+}
+
+// ── Events ──────────────────────────────────────────────────────────
+
 export interface BridgeEvent {
   type: string
   purchase_id?: string
@@ -150,8 +197,21 @@ export interface BridgeEvent {
 // subscribeEvents opens an SSE connection to the bridge server and invokes
 // onEvent for every event. Returns an unsubscribe function.
 // EventSource handles reconnection automatically on transient drops.
-export function subscribeEvents(onEvent: (e: BridgeEvent) => void): () => void {
-  const es = new EventSource('/api/events')
+//
+// EventSource cannot set custom headers, so we pass the JWT via a query
+// parameter. The token is short-lived and transmitted over the same origin,
+// so this is safe for same-origin SSE (the URL is never logged or shared).
+export async function subscribeEvents(onEvent: (e: BridgeEvent) => void): Promise<() => void> {
+  let url = '/api/events'
+  const supabase = getSupabase()
+  if (supabase) {
+    const { data } = await supabase.auth.getSession()
+    const token = data.session?.access_token
+    if (token) {
+      url += `?token=${encodeURIComponent(token)}`
+    }
+  }
+  const es = new EventSource(url)
   const handler = (ev: MessageEvent) => {
     try {
       const parsed = JSON.parse(ev.data) as BridgeEvent

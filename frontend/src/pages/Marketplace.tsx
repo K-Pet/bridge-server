@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getConfig, getSupabase } from '../lib/supabase'
 
 // Marketplace tab — embeds the Bridge Music Marketplace (Expo web bundle)
@@ -6,12 +6,16 @@ import { getConfig, getSupabase } from '../lib/supabase'
 // The surrounding shell (sidebar / player) is preserved; the storefront owns
 // the frame content.
 //
-// Session handoff: when the iframe loads, we forward the current Supabase
-// access + refresh tokens via postMessage. The storefront reads the message
-// on boot, rehydrates its own Supabase client, and the user lands already
-// signed in. In dev the two bundles share the same Supabase project, so
-// purchases completed in the iframe flow back to the home server via the
-// existing Stripe → deliver-purchase → /api/webhook/purchase pipeline.
+// Session handoff protocol:
+//   1. Bridge-server renders iframe → marketplace Expo app boots
+//   2. Marketplace's AuthProvider mounts, sets up its message listener,
+//      then sends { type: 'bridge.ready' } to the parent window
+//   3. We receive 'bridge.ready' and respond with { type: 'bridge.session',
+//      accessToken, refreshToken }
+//   4. Marketplace calls supabase.auth.setSession() → user is logged in
+//
+// This handshake avoids the race where postMessage fires before the
+// iframe's React tree has mounted its listener.
 
 export default function Marketplace() {
   const cfg = getConfig()
@@ -21,34 +25,68 @@ export default function Marketplace() {
 
   const marketplaceURL = cfg.marketplace_url || '/marketplace/'
 
-  useEffect(() => {
-    const supabase = getSupabase()
-    if (!supabase || !iframeRef.current) return
+  // Track whether the iframe has signalled readiness so we don't try to
+  // postMessage before it has navigated to the marketplace origin.
+  const iframeReady = useRef(false)
 
-    // Push the session into the frame on every auth change so token refreshes
-    // stay in sync. The storefront validates origin before accepting.
-    const forward = async () => {
-      const { data } = await supabase.auth.getSession()
-      const frame = iframeRef.current?.contentWindow
-      if (!frame || !data.session) return
-      try {
-        frame.postMessage(
-          {
-            type: 'bridge.session',
-            accessToken: data.session.access_token,
-            refreshToken: data.session.refresh_token,
-          },
-          targetOrigin(marketplaceURL),
-        )
-      } catch (err) {
-        console.warn('failed to forward session to marketplace iframe', err)
+  // Send the current Supabase session to the iframe.
+  const forwardSession = useCallback(async () => {
+    if (!iframeReady.current) {
+      console.log('[bridge:marketplace] forwardSession skipped — iframe not ready')
+      return
+    }
+    const supabase = getSupabase()
+    if (!supabase) return
+    const { data } = await supabase.auth.getSession()
+    const frame = iframeRef.current?.contentWindow
+    if (!frame || !data.session) return
+    console.log('[bridge:marketplace] forwarding session to iframe, target:', targetOrigin(marketplaceURL))
+    try {
+      // Send both tokens — the marketplace needs the refresh token for
+      // supabase.auth.setSession(). In production the iframe is same-origin
+      // (served at /marketplace/), so this is safe. The access token is
+      // short-lived; the refresh token lets the iframe maintain its session
+      // across navigations without re-handshaking.
+      frame.postMessage(
+        {
+          type: 'bridge.session',
+          accessToken: data.session.access_token,
+          refreshToken: data.session.refresh_token,
+        },
+        targetOrigin(marketplaceURL),
+      )
+    } catch (err) {
+      console.warn('failed to forward session to marketplace iframe', err)
+    }
+  }, [marketplaceURL])
+
+  // Listen for 'bridge.ready' from the iframe — the marketplace sends this
+  // once its AuthProvider has mounted and registered its message listener.
+  // Also keep forwarding on auth state changes for token refreshes.
+  useEffect(() => {
+    const handleMessage = (ev: MessageEvent) => {
+      console.log('[bridge:marketplace] message received:', ev.data?.type, 'origin:', ev.origin)
+      if (ev.data?.type === 'bridge.ready') {
+        iframeReady.current = true
+        forwardSession()
       }
     }
+    window.addEventListener('message', handleMessage)
 
-    forward()
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(forward)
-    return () => subscription.unsubscribe()
-  }, [marketplaceURL])
+    const supabase = getSupabase()
+    let unsubAuth: (() => void) | undefined
+    if (supabase) {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
+        forwardSession()
+      })
+      unsubAuth = () => subscription.unsubscribe()
+    }
+
+    return () => {
+      window.removeEventListener('message', handleMessage)
+      unsubAuth?.()
+    }
+  }, [forwardSession])
 
   return (
     <div className="marketplace-embed">
