@@ -2,7 +2,10 @@ package poller
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/bridgemusic/bridge-server/internal/config"
@@ -56,14 +59,24 @@ func (p *Poller) poll(ctx context.Context) {
 
 	for _, purchase := range purchases {
 		// Idempotency: if the webhook already delivered this purchase (all
-		// tasks completed locally), skip it — avoids overwriting a terminal
-		// "delivered" status back to "delivering".
+		// tasks completed locally) AND every expected file is still on
+		// disk, skip it — avoids overwriting a terminal "delivered"
+		// status back to "delivering". If files were deleted from the
+		// library, fall through and re-enqueue so the marketplace's
+		// "redeliver" actually redelivers.
 		summaries, err := p.queue.SummariesForPurchases([]string{purchase.ID})
 		if err == nil {
 			if s, ok := summaries[purchase.ID]; ok && s.Total > 0 && s.AllComplete {
-				slog.Info("poll: purchase already complete locally, skipping",
+				if !anyTrackFileMissing(p.cfg.MusicDir, purchase.Tracks) {
+					slog.Info("poll: purchase already complete locally, skipping",
+						"purchase", purchase.ID, "tracks", s.Total)
+					continue
+				}
+				slog.Info("poll: purchase complete locally but files missing — re-enqueuing",
 					"purchase", purchase.ID, "tracks", s.Total)
-				continue
+				if err := p.queue.DeleteTasksForPurchase(purchase.ID); err != nil {
+					slog.Warn("poll: failed to clear stale tasks", "purchase", purchase.ID, "error", err)
+				}
 			}
 		}
 
@@ -84,4 +97,25 @@ func (p *Poller) poll(ctx context.Context) {
 	if len(purchases) > 0 {
 		slog.Info("poll found purchases", "count", len(purchases))
 	}
+}
+
+// anyTrackFileMissing mirrors the webhook idempotency guard's filesystem
+// check — if any expected on-disk file is gone, the local "all complete"
+// state is stale and the poller should re-enqueue.
+func anyTrackFileMissing(musicDir string, tracks []store.Track) bool {
+	for _, t := range tracks {
+		path := store.ExpectedTrackPath(musicDir, t)
+		_, err := os.Stat(path)
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+		// Non-existence errors we can't reason about — treat as missing
+		// so we attempt re-download rather than silently stalling.
+		slog.Warn("poll: stat of expected track path failed", "path", path, "error", err)
+		return true
+	}
+	return false
 }

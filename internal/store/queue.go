@@ -110,6 +110,62 @@ func (q *Queue) DeleteTasksForPurchase(purchaseID string) error {
 	return err
 }
 
+// DeleteTasksAtPaths removes task rows whose expected download path (as
+// computed by ExpectedTrackPath) matches any of the given host paths.
+// Used by the library delete handlers so removing a file also clears the
+// "already delivered" flag for that track — otherwise the next redelivery
+// attempt would be short-circuited by the webhook idempotency guard even
+// though the file is gone. Returns the number of rows removed.
+func (q *Queue) DeleteTasksAtPaths(musicDir string, hostPaths []string) (int, error) {
+	if len(hostPaths) == 0 {
+		return 0, nil
+	}
+	target := make(map[string]struct{}, len(hostPaths))
+	for _, p := range hostPaths {
+		if p == "" {
+			continue
+		}
+		target[filepath.Clean(p)] = struct{}{}
+	}
+	if len(target) == 0 {
+		return 0, nil
+	}
+
+	rows, err := q.db.Query(`SELECT id, track FROM tasks`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var toDelete []string
+	for rows.Next() {
+		var id string
+		var trackJSON []byte
+		if err := rows.Scan(&id, &trackJSON); err != nil {
+			return 0, err
+		}
+		var t Track
+		if err := json.Unmarshal(trackJSON, &t); err != nil {
+			// Skip malformed rows — nothing we can match against.
+			continue
+		}
+		expected := filepath.Clean(ExpectedTrackPath(musicDir, t))
+		if _, ok := target[expected]; ok {
+			toDelete = append(toDelete, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	for _, id := range toDelete {
+		if _, err := q.db.Exec(`DELETE FROM tasks WHERE id = ?`, id); err != nil {
+			return len(toDelete), err
+		}
+	}
+	return len(toDelete), nil
+}
+
 // PurchaseTaskSummary is a per-purchase aggregate of task statuses returned to clients.
 type PurchaseTaskSummary struct {
 	Total      int            `json:"total"`

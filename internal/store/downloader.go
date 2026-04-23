@@ -183,11 +183,11 @@ func (d *Downloader) process(ctx context.Context, task *DownloadTask) error {
 	}
 
 	// Atomic move to final path
-	finalDir := filepath.Join(d.cfg.MusicDir, "Bridge", sanitize(track.Artist), sanitize(track.Album))
+	finalPath := ExpectedTrackPath(d.cfg.MusicDir, track)
+	finalDir := filepath.Dir(finalPath)
 	if err := os.MkdirAll(finalDir, 0755); err != nil {
 		return fmt.Errorf("create album dir: %w", err)
 	}
-	finalPath := filepath.Join(finalDir, sanitize(track.Title)+"."+track.Format)
 
 	if err := os.Rename(stagingPath, finalPath); err != nil {
 		return fmt.Errorf("move to final path: %w", err)
@@ -299,6 +299,21 @@ func coverCandidates(albumDir string) []string {
 		out[i] = filepath.Join(albumDir, n)
 	}
 	return out
+}
+
+// ExpectedTrackPath returns the filesystem path where the downloader writes
+// a given track, constructed from the configured music dir and the same
+// sanitization applied by Downloader.process. Shared so callers that need
+// to reason about on-disk state (the webhook idempotency guard, the library
+// delete handlers) agree with the downloader about where files live.
+func ExpectedTrackPath(musicDir string, track Track) string {
+	return filepath.Join(
+		musicDir,
+		"Bridge",
+		sanitize(track.Artist),
+		sanitize(track.Album),
+		sanitize(track.Title)+"."+track.Format,
+	)
 }
 
 var unsafeChars = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]`)
