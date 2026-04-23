@@ -45,6 +45,7 @@ func Bootstrap(ctx context.Context, cfg *config.Config) (*Client, error) {
 	}
 
 	client := NewClient(cfg.NavidromeURL, creds.Username, creds.Password)
+	client.musicDir = cfg.MusicDir
 	if err := client.Authenticate(ctx); err != nil {
 		return nil, fmt.Errorf("failed to authenticate with stored credentials: %w", err)
 	}

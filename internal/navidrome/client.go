@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +23,10 @@ type Client struct {
 	password   string
 	jwt        string
 	httpClient *http.Client
+
+	// musicDir is the host-side music directory (e.g. "./data/music").
+	// Used to translate Navidrome-relative paths to host filesystem paths.
+	musicDir string
 }
 
 func NewClient(baseURL, username, password string) *Client {
@@ -31,6 +36,13 @@ func NewClient(baseURL, username, password string) *Client {
 		password:   password,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// HostPath translates a Navidrome-relative path (e.g. "Bridge/Artist/Album/song.flac")
+// to the corresponding host filesystem path (e.g. "./data/music/Bridge/Artist/Album/song.flac").
+// The native API returns paths relative to the library root; this prepends the host music dir.
+func (c *Client) HostPath(ndPath string) string {
+	return filepath.Join(c.musicDir, ndPath)
 }
 
 func (c *Client) Authenticate(ctx context.Context) error {

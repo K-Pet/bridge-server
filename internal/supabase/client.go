@@ -72,7 +72,7 @@ func (c *Client) FetchPendingPurchases(ctx context.Context, serverID string) ([]
 	}
 
 	endpoint := fmt.Sprintf(
-		"%s/rest/v1/purchase_tracks?server_id=eq.%s&purchase_status=in.(awaiting_action,delivering)&order=created_at",
+		"%s/rest/v1/purchase_tracks?server_id=eq.%s&purchase_status=in.(awaiting_action,delivering)&order=created_at&limit=500",
 		c.cfg.SupabaseURL, url.QueryEscape(serverID),
 	)
 
@@ -201,6 +201,178 @@ func escapePathSegments(p string) string {
 		segments[i] = url.PathEscape(s)
 	}
 	return strings.Join(segments, "/")
+}
+
+// HomeServer represents a row in the user_home_servers table.
+type HomeServer struct {
+	ID           string  `json:"id"`
+	UserID       string  `json:"user_id"`
+	Label        string  `json:"label"`
+	ServerID     *string `json:"server_id"`
+	WebhookURL   string  `json:"webhook_url"`
+	LastPairedAt *string `json:"last_paired_at"`
+}
+
+// GetPairStatus checks whether a user has a home server paired in the
+// marketplace. Returns the server record if paired, nil otherwise.
+func (c *Client) GetPairStatus(ctx context.Context, userID string) (*HomeServer, error) {
+	if c.cfg.SupabaseURL == "" || c.cfg.SupabaseServiceKey == "" {
+		return nil, fmt.Errorf("supabase credentials missing")
+	}
+
+	endpoint := fmt.Sprintf(
+		"%s/rest/v1/user_home_servers?user_id=eq.%s&select=id,user_id,label,server_id,webhook_url,last_paired_at",
+		c.cfg.SupabaseURL, url.QueryEscape(userID),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("apikey", c.cfg.SupabaseServiceKey)
+	req.Header.Set("Authorization", "Bearer "+c.cfg.SupabaseServiceKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("supabase returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var rows []HomeServer
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return nil, fmt.Errorf("decode user_home_servers: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return &rows[0], nil
+}
+
+// AutoPair upserts this bridge-server as the user's home server in the
+// marketplace's user_home_servers table. This is the streamlined
+// alternative to the manual pair-code exchange — used during onboarding
+// when the user signs in/up on this server directly.
+func (c *Client) AutoPair(ctx context.Context, userID string) (*HomeServer, error) {
+	if c.cfg.SupabaseURL == "" || c.cfg.SupabaseServiceKey == "" {
+		return nil, fmt.Errorf("supabase credentials missing")
+	}
+	if c.cfg.ExternalURL == "" {
+		return nil, fmt.Errorf("BRIDGE_EXTERNAL_URL is required for auto-pair")
+	}
+	if c.cfg.ServerID == "" {
+		return nil, fmt.Errorf("BRIDGE_SERVER_ID is required for auto-pair")
+	}
+	if c.cfg.WebhookSecret == "" {
+		return nil, fmt.Errorf("BRIDGE_WEBHOOK_SECRET is required for auto-pair")
+	}
+
+	label := c.cfg.Label
+	if label == "" {
+		label = c.cfg.ServerID
+	}
+
+	webhookURL := strings.TrimRight(c.cfg.ExternalURL, "/") + "/api/webhook/purchase"
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	payload := map[string]any{
+		"user_id":        userID,
+		"label":          label,
+		"server_id":      c.cfg.ServerID,
+		"webhook_url":    webhookURL,
+		"webhook_secret": c.cfg.WebhookSecret,
+		"last_paired_at": now,
+		"updated_at":     now,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	endpoint := fmt.Sprintf("%s/rest/v1/user_home_servers", c.cfg.SupabaseURL)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("apikey", c.cfg.SupabaseServiceKey)
+	req.Header.Set("Authorization", "Bearer "+c.cfg.SupabaseServiceKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Prefer", "resolution=merge-duplicates,return=representation")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase upsert failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("supabase returned status %d: %s", resp.StatusCode, string(b))
+	}
+
+	var rows []HomeServer
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return nil, fmt.Errorf("decode upsert response: %w", err)
+	}
+	if len(rows) == 0 {
+		return &HomeServer{
+			UserID:     userID,
+			Label:      label,
+			ServerID:   &c.cfg.ServerID,
+			WebhookURL: webhookURL,
+		}, nil
+	}
+	return &rows[0], nil
+}
+
+// GetUserProfile fetches a user's profile from the user_profiles table.
+func (c *Client) GetUserProfile(ctx context.Context, userID string) (map[string]any, error) {
+	if c.cfg.SupabaseURL == "" || c.cfg.SupabaseServiceKey == "" {
+		return nil, fmt.Errorf("supabase credentials missing")
+	}
+
+	endpoint := fmt.Sprintf(
+		"%s/rest/v1/user_profiles?id=eq.%s&select=id,username,full_name,avatar_url",
+		c.cfg.SupabaseURL, url.QueryEscape(userID),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("apikey", c.cfg.SupabaseServiceKey)
+	req.Header.Set("Authorization", "Bearer "+c.cfg.SupabaseServiceKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("supabase returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var rows []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return nil, fmt.Errorf("decode user_profiles: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return rows[0], nil
+}
+
+// CanAutoPair reports whether this server has the configuration required
+// for auto-pairing (external URL, server ID, webhook secret).
+func (c *Client) CanAutoPair() bool {
+	return c.cfg.ExternalURL != "" && c.cfg.ServerID != "" && c.cfg.WebhookSecret != ""
 }
 
 // MarkDelivered updates a purchase status to "delivered" in Supabase.

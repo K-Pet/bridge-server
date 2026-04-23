@@ -40,6 +40,23 @@ type Config struct {
 	// /marketplace/ on this same server; in dev it typically points at
 	// http://localhost:8081 (the expo metro web dev server).
 	MarketplaceURL string
+
+	// ExternalURL is the publicly-reachable URL of this bridge-server
+	// instance (e.g. "https://music.example.com"). Used by the auto-pair
+	// onboarding flow to construct the webhook_url written into the
+	// marketplace's user_home_servers table. Not required if auto-pair
+	// isn't used (manual pair codes still work without it).
+	ExternalURL string
+
+	// Label is a human-friendly name for this home server shown in the
+	// marketplace UI (e.g. "Living Room Server"). Falls back to ServerID.
+	Label string
+
+	// DevEmail and DevPassword are test credentials the frontend can
+	// auto-sign-in with in dev mode. Only served via /api/config when
+	// DevMode is true. Defaults match the marketplace seed script.
+	DevEmail    string
+	DevPassword string
 }
 
 func Load() (*Config, error) {
@@ -60,6 +77,10 @@ func Load() (*Config, error) {
 		SupabaseJWTSecret:  envStr("BRIDGE_SUPABASE_JWT_SECRET", ""),
 		WebhookSecret:      envStr("BRIDGE_WEBHOOK_SECRET", ""),
 		MarketplaceURL:     envStr("BRIDGE_MARKETPLACE_URL", "/marketplace/"),
+		ExternalURL:        envStr("BRIDGE_EXTERNAL_URL", ""),
+		Label:              envStr("BRIDGE_LABEL", ""),
+		DevEmail:           envStr("BRIDGE_DEV_EMAIL", "test@bridge.music"),
+		DevPassword:        envStr("BRIDGE_DEV_PASSWORD", "testpass123"),
 	}
 
 	if !cfg.DevMode {
@@ -72,16 +93,6 @@ func Load() (*Config, error) {
 		if cfg.ServerID == "" && cfg.DeliveryMode == "poll" {
 			return nil, fmt.Errorf("BRIDGE_SERVER_ID is required in poll mode")
 		}
-	}
-	// Safety net: refuse to start in dev mode when real Supabase credentials
-	// are present — this catches accidental BRIDGE_DEV=true in production
-	// deployments.  Override with BRIDGE_ALLOW_DEV_AUTH=true if intentional.
-	if cfg.DevMode && cfg.SupabaseJWTSecret != "" && envStr("BRIDGE_ALLOW_DEV_AUTH", "") != "true" {
-		return nil, fmt.Errorf(
-			"BRIDGE_DEV=true but BRIDGE_SUPABASE_JWT_SECRET is set — this looks like a " +
-				"production deployment with dev auth enabled. Refusing to start. " +
-				"Set BRIDGE_ALLOW_DEV_AUTH=true to override",
-		)
 	}
 	if cfg.DevMode && cfg.ServerID == "" {
 		cfg.ServerID = "local-dev"

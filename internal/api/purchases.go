@@ -22,7 +22,7 @@ func handlePurchases(cfg *config.Config, queue *store.Queue) http.HandlerFunc {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID := resolveRequestUser(client, cfg, auth.UserID(r.Context()))
+		userID := auth.UserID(r.Context())
 		if userID == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -47,7 +47,7 @@ func handlePurchases(cfg *config.Config, queue *store.Queue) http.HandlerFunc {
 				"track:tracks(id,title,artist,album_id,format,disc_number,album_index),"+
 				"album:albums(id,title,artist,cover_art_url,"+
 				"tracks(id,title,artist,format,disc_number,album_index)))"+
-				"&order=created_at.desc",
+				"&order=created_at.desc&limit=200",
 			cfg.SupabaseURL, userID,
 		)
 
@@ -118,7 +118,7 @@ func handleRedeliver(cfg *config.Config, queue *store.Queue) http.HandlerFunc {
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID := resolveRequestUser(client, cfg, auth.UserID(r.Context()))
+		userID := auth.UserID(r.Context())
 		if userID == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -150,7 +150,7 @@ func handleRedeliver(cfg *config.Config, queue *store.Queue) http.HandlerFunc {
 		}
 
 		// Fire the Edge Function — same entry point used by the initial purchase flow
-		deliveryErr := triggerDelivery(client, cfg, purchaseID)
+		deliveryErr := triggerDelivery(r.Context(), client, cfg, purchaseID)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
@@ -168,7 +168,7 @@ func handleTrackDownload(cfg *config.Config) http.HandlerFunc {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID := resolveRequestUser(client, cfg, auth.UserID(r.Context()))
+		userID := auth.UserID(r.Context())
 		if userID == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -181,7 +181,7 @@ func handleTrackDownload(cfg *config.Config) http.HandlerFunc {
 		}
 
 		// Ownership: either the track or its parent album must be in entitlements
-		_, ownedTracks, err := fetchEntitlements(client, cfg, userID)
+		_, ownedTracks, err := fetchEntitlements(r.Context(), client, cfg, userID)
 		if err != nil {
 			slog.Error("download: entitlement check failed", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -324,7 +324,7 @@ func handleAlbumZip(cfg *config.Config) http.HandlerFunc {
 	client := &http.Client{Timeout: 10 * time.Minute}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID := resolveRequestUser(client, cfg, auth.UserID(r.Context()))
+		userID := auth.UserID(r.Context())
 		if userID == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -338,7 +338,7 @@ func handleAlbumZip(cfg *config.Config) http.HandlerFunc {
 
 		// Ownership: either album-level entitlement, OR every track in the
 		// album is individually owned. Album-level is the common case.
-		ownedAlbums, ownedTracks, err := fetchEntitlements(client, cfg, userID)
+		ownedAlbums, ownedTracks, err := fetchEntitlements(r.Context(), client, cfg, userID)
 		if err != nil {
 			slog.Error("zip: entitlement check failed", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -580,7 +580,7 @@ func handleEntitlements(cfg *config.Config) http.HandlerFunc {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID := resolveRequestUser(client, cfg, auth.UserID(r.Context()))
+		userID := auth.UserID(r.Context())
 		w.Header().Set("Content-Type", "application/json")
 
 		empty := map[string]any{"album_ids": []string{}, "track_ids": []string{}}
@@ -589,7 +589,7 @@ func handleEntitlements(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
-		albumIDs, trackIDs, err := fetchEntitlements(client, cfg, userID)
+		albumIDs, trackIDs, err := fetchEntitlements(r.Context(), client, cfg, userID)
 		if err != nil {
 			slog.Error("failed to fetch entitlements", "error", err)
 			json.NewEncoder(w).Encode(empty)
@@ -605,13 +605,16 @@ func handleEntitlements(cfg *config.Config) http.HandlerFunc {
 
 // fetchEntitlements returns deduped album_ids + track_ids the user owns.
 // Tracks belonging to a purchased album are included in track_ids.
-func fetchEntitlements(client *http.Client, cfg *config.Config, userID string) ([]string, []string, error) {
+func fetchEntitlements(ctx context.Context, client *http.Client, cfg *config.Config, userID string) ([]string, []string, error) {
 	// Purchase items (direct ownership)
 	itemsURL := fmt.Sprintf(
-		"%s/rest/v1/purchase_items?select=track_id,album_id,purchase:purchases!inner(user_id,status)&purchase.user_id=eq.%s",
+		"%s/rest/v1/purchase_items?select=track_id,album_id,purchase:purchases!inner(user_id,status)&purchase.user_id=eq.%s&limit=5000",
 		cfg.SupabaseURL, userID,
 	)
-	req, _ := http.NewRequest("GET", itemsURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", itemsURL, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build entitlements request: %w", err)
+	}
 	req.Header.Set("apikey", cfg.SupabaseServiceKey)
 	req.Header.Set("Authorization", "Bearer "+cfg.SupabaseServiceKey)
 
@@ -651,7 +654,7 @@ func fetchEntitlements(client *http.Client, cfg *config.Config, userID string) (
 		for id := range albumSet {
 			ids = append(ids, id)
 		}
-		expandedTracks, err := fetchTrackIDsForAlbums(client, cfg, ids)
+		expandedTracks, err := fetchTrackIDsForAlbums(ctx, client, cfg, ids)
 		if err != nil {
 			slog.Warn("failed to expand album tracks for entitlements", "error", err)
 		} else {
@@ -672,7 +675,7 @@ func fetchEntitlements(client *http.Client, cfg *config.Config, userID string) (
 	return albumIDs, trackIDs, nil
 }
 
-func fetchTrackIDsForAlbums(client *http.Client, cfg *config.Config, albumIDs []string) ([]string, error) {
+func fetchTrackIDsForAlbums(ctx context.Context, client *http.Client, cfg *config.Config, albumIDs []string) ([]string, error) {
 	if len(albumIDs) == 0 {
 		return nil, nil
 	}
@@ -681,12 +684,15 @@ func fetchTrackIDsForAlbums(client *http.Client, cfg *config.Config, albumIDs []
 		if i > 0 {
 			inList += ","
 		}
-		inList += id
+		inList += url.QueryEscape(id)
 	}
 	inList += ")"
 
-	url := fmt.Sprintf("%s/rest/v1/tracks?album_id=in.%s&select=id", cfg.SupabaseURL, inList)
-	req, _ := http.NewRequest("GET", url, nil)
+	reqURL := fmt.Sprintf("%s/rest/v1/tracks?album_id=in.%s&select=id&limit=5000", cfg.SupabaseURL, inList)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build track expansion request: %w", err)
+	}
 	req.Header.Set("apikey", cfg.SupabaseServiceKey)
 	req.Header.Set("Authorization", "Bearer "+cfg.SupabaseServiceKey)
 
@@ -714,31 +720,23 @@ func fetchTrackIDsForAlbums(client *http.Client, cfg *config.Config, albumIDs []
 	return out, nil
 }
 
-// resolveRequestUser returns the Supabase user id for the current request.
-// In dev mode, the auth middleware may set "dev-user"; resolve to the first
-// real user so entitlement/purchase queries work end-to-end against seeded data.
-func resolveRequestUser(client *http.Client, cfg *config.Config, rawID string) string {
-	if rawID == "" {
-		return ""
-	}
-	if cfg.DevMode && rawID == "dev-user" {
-		if resolved, err := resolveDevUser(client, cfg); err == nil {
-			return resolved
-		}
-		return ""
-	}
-	return rawID
-}
-
 func handleConfig(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		payload := map[string]any{
 			"supabase_url":      cfg.SupabaseURL,
 			"supabase_anon_key": cfg.SupabaseAnonKey,
 			"dev_mode":          cfg.DevMode,
 			"marketplace_url":   cfg.MarketplaceURL,
-		})
+		}
+		// Expose test credentials in dev mode so the frontend can auto-
+		// sign-in and forward a real Supabase session to the marketplace
+		// iframe. Never served in production.
+		if cfg.DevMode && cfg.DevEmail != "" {
+			payload["dev_email"] = cfg.DevEmail
+			payload["dev_password"] = cfg.DevPassword
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(payload)
 	}
 }
 

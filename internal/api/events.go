@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/bridgemusic/bridge-server/internal/config"
+	"github.com/bridgemusic/bridge-server/internal/supabase"
 )
 
 // Event is a server-sent event published to connected clients.
@@ -60,8 +64,31 @@ func (h *EventHub) unsubscribe(ch chan Event) {
 // handleEvents streams events as Server-Sent Events. The stream stays open for
 // the life of the request; we emit a comment heartbeat every 20s to keep
 // proxies from closing idle connections.
-func handleEvents(hub *EventHub) http.HandlerFunc {
+//
+// Auth: EventSource cannot set custom headers, so this endpoint accepts the
+// JWT via a ?token= query parameter in addition to the standard Authorization
+// header. In dev mode, unauthenticated connections are allowed.
+func handleEvents(hub *EventHub, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Inline auth — check Bearer header first, then ?token= query param.
+		token := ""
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
+		} else if t := r.URL.Query().Get("token"); t != "" {
+			token = t
+		}
+
+		if !cfg.DevMode {
+			if token == "" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			if _, err := supabase.VerifyJWT(token, cfg.SupabaseJWTSecret); err != nil {
+				http.Error(w, "invalid token", http.StatusUnauthorized)
+				return
+			}
+		}
+
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
