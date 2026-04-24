@@ -8,9 +8,28 @@ services:
       - ./data/navidrome:/data/navidrome
       - ./data/bridge:/data/bridge
     environment:
-      BRIDGE_SUPABASE_URL: ${SUPABASE_URL}
-      BRIDGE_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
-      BRIDGE_SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
-      BRIDGE_WEBHOOK_SECRET: ${WEBHOOK_SECRET}
-      BRIDGE_DELIVERY_MODE: poll
+      # ── Required: Supabase project the marketplace lives in ──────────
+      BRIDGE_SUPABASE_URL: ${BRIDGE_SUPABASE_URL}
+      BRIDGE_SUPABASE_ANON_KEY: ${BRIDGE_SUPABASE_ANON_KEY}
+      BRIDGE_SUPABASE_SERVICE_KEY: ${BRIDGE_SUPABASE_SERVICE_KEY}
+      BRIDGE_SUPABASE_JWT_SECRET: ${BRIDGE_SUPABASE_JWT_SECRET}
+      # ── Required: HMAC for webhook delivery ──────────────────────────
+      BRIDGE_WEBHOOK_SECRET: ${BRIDGE_WEBHOOK_SECRET}
+      # ── Required for auto-pair (recommended for all installs) ────────
+      # Without these the onboarding wizard falls back to manual
+      # pair-code entry. SERVER_ID must be unique across users — a
+      # UUIDv4 is fine. EXTERNAL_URL is the public origin Supabase will
+      # call for webhook delivery (https://music.example.com or a
+      # Cloudflare Tunnel URL).
+      BRIDGE_SERVER_ID: ${BRIDGE_SERVER_ID}
+      BRIDGE_EXTERNAL_URL: ${BRIDGE_EXTERNAL_URL}
+      BRIDGE_LABEL: ${BRIDGE_LABEL:-Home Server}
+      # ── Delivery mode ────────────────────────────────────────────────
+      # webhook = Supabase pushes purchases to BRIDGE_EXTERNAL_URL.
+      # poll    = bridge-server pulls every BRIDGE_POLL_INTERVAL.
+      # Use poll when EXTERNAL_URL is not reachable from the public
+      # internet (no DNS, no tunnel) — purchases will still deliver,
+      # just on a delay.
+      BRIDGE_DELIVERY_MODE: ${BRIDGE_DELIVERY_MODE:-webhook}
+      BRIDGE_POLL_INTERVAL: ${BRIDGE_POLL_INTERVAL:-5m}
     restart: unless-stopped
