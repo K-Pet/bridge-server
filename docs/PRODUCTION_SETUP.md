@@ -80,25 +80,7 @@ delivery latency (default 5 min).
 
 ---
 
-## 2. Generate per-server secrets
-
-Run these once on the host that will run the server. Write the values
-into `.env` in the next step.
-
-```bash
-# Webhook HMAC secret. The marketplace's deliver-purchase function will
-# sign every webhook body with this key; the server will reject requests
-# with the wrong signature.
-openssl rand -hex 32
-
-# Server identity. Stable per physical install, written into every
-# purchase the marketplace fans out to this server.
-uuidgen | tr '[:upper:]' '[:lower:]'
-```
-
----
-
-## 3. Configure `.env`
+## 2. Configure `.env`
 
 Clone the repo on the deploy host, then:
 
@@ -107,36 +89,44 @@ cp .env.example .env
 $EDITOR .env
 ```
 
-Required fields:
+You only need to set **four lines**:
 
-| Var | Where to get it |
-|-----|-----------------|
-| `BRIDGE_SUPABASE_URL` | Supabase Dashboard → Project Settings → API |
-| `BRIDGE_SUPABASE_ANON_KEY` | Same page (publishable key) |
-| `BRIDGE_SUPABASE_SERVICE_KEY` | Same page (service role — keep secret) |
-| `BRIDGE_SUPABASE_JWT_SECRET` | Same page → JWT Secret. Used to verify Authorization headers from the iOS / web client |
-| `BRIDGE_WEBHOOK_SECRET` | Output of step 2 (`openssl rand -hex 32`) |
-| `BRIDGE_SERVER_ID` | Output of step 2 (`uuidgen`) |
-| `BRIDGE_EXTERNAL_URL` | The HTTPS URL you'll expose in step 4 |
-| `BRIDGE_LABEL` | Friendly name shown in the marketplace ("Living Room", etc.) |
+| Var | What it is |
+|-----|------------|
+| `MUSIC_DIR` | Where your music lives on disk. Defaults to `./data/music` inside the repo if blank. |
+| `BRIDGE_LABEL` | Friendly name shown in the marketplace UI ("Living Room", etc.). |
+| `BRIDGE_EXTERNAL_URL` | The HTTPS URL you'll expose in step 3. |
+| `BRIDGE_SUPABASE_SERVICE_KEY` | Operator-supplied (transitional — see callout below). |
+| `BRIDGE_SUPABASE_JWT_SECRET` | Operator-supplied (transitional — see callout below). |
 
-`BRIDGE_DELIVERY_MODE=webhook` is correct for almost everyone. Switch
-to `poll` only if you can't make `BRIDGE_EXTERNAL_URL` reachable from
-the public internet.
+Auto-managed (don't set unless you know why):
 
-> **Never commit `.env`.** It contains the service-role key and the
-> webhook HMAC secret. The repo's `.gitignore` already covers it; double-
-> check before any `git add`.
+- **`BRIDGE_SERVER_ID`** and **`BRIDGE_WEBHOOK_SECRET`** mint themselves
+  on first boot and persist to `/data/bridge/credentials.json` (mode
+  0600). To rotate either, delete that file and restart — the
+  marketplace re-pairs on the next user sign-in.
+- **`BRIDGE_SUPABASE_URL`** and **`BRIDGE_SUPABASE_ANON_KEY`** are baked
+  into the public image. Operators forking for a different Supabase
+  project pass `--build-arg` at `docker build` time.
+
+> **Phase 2 will eliminate `SERVICE_KEY` and `JWT_SECRET`.** They're
+> currently required because bridge-server makes service-role writes
+> (auto-pair, mark-delivered) and verifies JWTs locally with the shared
+> HMAC secret. Phase 2 moves both behind Supabase Edge Functions so
+> end-users won't need to know or rotate them.
+
+> **Never commit `.env`.** The two transitional secrets above grant
+> god-mode access to the Bridge Music Supabase project.
 
 ---
 
-## 4. Expose the server publicly
+## 3. Expose the server publicly
 
 The marketplace's `deliver-purchase` Edge Function calls
 `${BRIDGE_EXTERNAL_URL}/api/webhook/purchase` from Supabase's edge
 network. Pick **one** of the following.
 
-### 4a. Real domain + reverse proxy (production)
+### 3a. Real domain + reverse proxy (production)
 
 1. Point an A record at the host (`music.example.com → 1.2.3.4`).
 2. Terminate TLS in front of the container — Caddy is the simplest:
@@ -151,7 +141,7 @@ network. Pick **one** of the following.
 
 3. Set `BRIDGE_EXTERNAL_URL=https://music.example.com` in `.env`.
 
-### 4b. Cloudflare Tunnel (ecosystem testing)
+### 3b. Cloudflare Tunnel (ecosystem testing)
 
 No DNS, no port-forwarding, no firewall changes. Free for personal
 use.
@@ -176,7 +166,7 @@ Cloudflare prints a `https://*.trycloudflare.com` URL. Paste it into
 
 ---
 
-## 5. Boot the stack
+## 4. Boot the stack
 
 ```bash
 docker compose up -d
@@ -201,7 +191,7 @@ curl -s "$BRIDGE_EXTERNAL_URL/api/health"
 
 ---
 
-## 6. First user — sign in & auto-pair
+## 5. First user — sign in & auto-pair
 
 1. Open `$BRIDGE_EXTERNAL_URL` in a browser.
 2. **Sign Up** with the email you use on the marketplace iOS app, or
@@ -227,17 +217,19 @@ You should see exactly one row with `webhook_url` matching
 `$BRIDGE_EXTERNAL_URL/api/webhook/purchase`.
 
 > **No "Pair step" appeared?** That means
-> `auto_pair_available = false`. Check `BRIDGE_EXTERNAL_URL`,
-> `BRIDGE_SERVER_ID`, and `BRIDGE_WEBHOOK_SECRET` — all three must be
-> non-empty in the running container's environment.
+> `auto_pair_available = false`. `BRIDGE_SERVER_ID` and
+> `BRIDGE_WEBHOOK_SECRET` should auto-mint at first boot — confirm
+> they did by inspecting `/data/bridge/credentials.json`. The other
+> requirement is `BRIDGE_EXTERNAL_URL` — confirm it's reaching the
+> container:
 >
 > ```bash
-> docker compose exec bridge-music env | grep ^BRIDGE_
+> docker compose exec bridge-music sh -c 'cat /data/bridge/credentials.json && env | grep BRIDGE_EXTERNAL_URL'
 > ```
 
 ---
 
-## 7. End-to-end purchase test
+## 6. End-to-end purchase test
 
 With the marketplace iOS app or web frontend (on the same Supabase
 project, signed in as the same user):
@@ -271,7 +263,7 @@ If the purchase is stuck on `delivering` after 60 s, jump to
 
 ---
 
-## 8. iOS app auto-connect
+## 7. iOS app auto-connect
 
 With the user paired in step 6, fresh-installing Bridge Music on iOS:
 
@@ -291,7 +283,7 @@ if you've already signed in).
 
 ---
 
-## 9. Hardening checklist (before sharing the URL)
+## 8. Hardening checklist (before sharing the URL)
 
 - [ ] TLS in front of the container (step 4a or Tunnel — never expose
       port 8080 over plain HTTP).
@@ -309,21 +301,21 @@ if you've already signed in).
 
 ---
 
-## 10. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `auto_pair_available: false` in onboarding | One of `BRIDGE_EXTERNAL_URL` / `BRIDGE_SERVER_ID` / `BRIDGE_WEBHOOK_SECRET` is empty | `docker compose exec bridge-music env \| grep ^BRIDGE_` |
 | Onboarding stuck on "Linking your server…" | `/api/auto-pair` is hitting Supabase but the service-key is wrong / JWT secret mismatch | Check container logs for `auto-pair failed`. Re-paste keys from Supabase Dashboard. |
 | Purchase webhook never arrives | `BRIDGE_EXTERNAL_URL` not reachable from Supabase's edge network | `curl -X POST $BRIDGE_EXTERNAL_URL/api/webhook/purchase` from a public host — should respond with 401 (signature missing). If it times out, public ingress is broken. |
-| Webhook arrives but is rejected with `unauthorized` | `BRIDGE_WEBHOOK_SECRET` rotated after pairing | The marketplace is still signing with the old secret. Either restore the old secret or have the user re-run onboarding (auto-pair upserts the new secret). |
+| Webhook arrives but is rejected with `unauthorized` | Webhook secret rotated after pairing (e.g. `/data/bridge/credentials.json` was deleted) | The marketplace is still signing with the old secret. Have the user re-run onboarding (auto-pair upserts the new secret) — or restore the old `credentials.json` from backup. |
 | `webhook too old` | Host clock skew > 5 minutes from Supabase | `timedatectl` / `chronyd` — webhooks are timestamp-signed against a 5-min window. |
 | Library page is empty after a successful download | Navidrome scan didn't trigger — check `/data/navidrome/navidrome.log` | Restart container. If persistent, file an issue with the scan log. |
 | iOS auto-connect doesn't pick up the pairing | iOS app is still signed in with a stale session, or in `.navidromeDirect` mode | Settings → Self Hosted → Disconnect, then sign out and back in. |
 
 ---
 
-## 11. Multi-user / team installs
+## 10. Multi-user / team installs
 
 A single bridge-server instance is single-user by design today
 (`user_home_servers` rows are 1:1 with users; the frontend doesn't yet
@@ -338,7 +330,7 @@ Supabase account. Multi-user is on the roadmap (`PROJECT.md` →
 
 ---
 
-## 12. Updating
+## 11. Updating
 
 ```bash
 git pull

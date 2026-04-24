@@ -50,11 +50,22 @@ ENV ND_MUSICFOLDER=/data/music \
     ND_ADDRESS=127.0.0.1 \
     ND_PORT=4533
 
-# Bridge server config
+# Bridge server config — operational defaults (paths, ports).
 ENV BRIDGE_PORT=8080 \
     BRIDGE_DATA=/data/bridge \
     BRIDGE_MUSIC_DIR=/data/music \
     BRIDGE_ND_URL=http://127.0.0.1:4533
+
+# Bridge Music Supabase project — baked-in defaults so end-users don't
+# need to know or configure these. Both values are publishable by
+# design (the URL is the project identity; the publishable anon key is
+# RLS-gated and safe in client builds). Operators forking the image
+# for a different Supabase project pass --build-arg at build time;
+# runtime `-e BRIDGE_SUPABASE_URL=…` still wins over these defaults.
+ARG BRIDGE_SUPABASE_URL_DEFAULT=https://ryddlkjlpxtdrdvggipo.supabase.co
+ARG BRIDGE_SUPABASE_ANON_KEY_DEFAULT=sb_publishable_Wl562UROunrQI0XIqlb8cQ_efLR70Oe
+ENV BRIDGE_SUPABASE_URL=${BRIDGE_SUPABASE_URL_DEFAULT} \
+    BRIDGE_SUPABASE_ANON_KEY=${BRIDGE_SUPABASE_ANON_KEY_DEFAULT}
 
 VOLUME ["/data/music", "/data/navidrome", "/data/bridge"]
 EXPOSE 8080

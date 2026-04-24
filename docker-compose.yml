@@ -4,32 +4,40 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./data/music:/data/music
+      # Point this at wherever your music will live. Everything else is
+      # bridge-server state — leave the defaults.
+      - ${MUSIC_DIR:-./data/music}:/data/music
       - ./data/navidrome:/data/navidrome
       - ./data/bridge:/data/bridge
     environment:
-      # ── Required: Supabase project the marketplace lives in ──────────
-      BRIDGE_SUPABASE_URL: ${BRIDGE_SUPABASE_URL}
-      BRIDGE_SUPABASE_ANON_KEY: ${BRIDGE_SUPABASE_ANON_KEY}
+      # ── User-facing config ──────────────────────────────────────────
+      # Friendly name shown in the marketplace ("Living Room", etc.).
+      BRIDGE_LABEL: ${BRIDGE_LABEL:-My Bridge Server}
+      # Publicly-reachable URL of this server. The marketplace fans
+      # purchases out to ${BRIDGE_EXTERNAL_URL}/api/webhook/purchase.
+      # Use a real domain or a Cloudflare Tunnel URL — see
+      # docs/PRODUCTION_SETUP.md.
+      BRIDGE_EXTERNAL_URL: ${BRIDGE_EXTERNAL_URL}
+
+      # ── Operator-supplied (Phase 2 will eliminate these) ────────────
+      # Supabase service-role key + JWT secret for the Bridge Music
+      # project. Currently required because bridge-server makes
+      # service-role writes (auto-pair, mark-delivered) and verifies
+      # JWTs locally with the shared HMAC secret. Phase 2 moves both
+      # behind Edge Functions so end-users won't see these vars.
       BRIDGE_SUPABASE_SERVICE_KEY: ${BRIDGE_SUPABASE_SERVICE_KEY}
       BRIDGE_SUPABASE_JWT_SECRET: ${BRIDGE_SUPABASE_JWT_SECRET}
-      # ── Required: HMAC for webhook delivery ──────────────────────────
-      BRIDGE_WEBHOOK_SECRET: ${BRIDGE_WEBHOOK_SECRET}
-      # ── Required for auto-pair (recommended for all installs) ────────
-      # Without these the onboarding wizard falls back to manual
-      # pair-code entry. SERVER_ID must be unique across users — a
-      # UUIDv4 is fine. EXTERNAL_URL is the public origin Supabase will
-      # call for webhook delivery (https://music.example.com or a
-      # Cloudflare Tunnel URL).
-      BRIDGE_SERVER_ID: ${BRIDGE_SERVER_ID}
-      BRIDGE_EXTERNAL_URL: ${BRIDGE_EXTERNAL_URL}
-      BRIDGE_LABEL: ${BRIDGE_LABEL:-Home Server}
-      # ── Delivery mode ────────────────────────────────────────────────
-      # webhook = Supabase pushes purchases to BRIDGE_EXTERNAL_URL.
-      # poll    = bridge-server pulls every BRIDGE_POLL_INTERVAL.
-      # Use poll when EXTERNAL_URL is not reachable from the public
-      # internet (no DNS, no tunnel) — purchases will still deliver,
-      # just on a delay.
+
+      # ── Auto-managed (do not set unless you know why) ──────────────
+      # Delivery: webhook (push, default) or poll. Use poll if you
+      # can't expose BRIDGE_EXTERNAL_URL to the public internet.
       BRIDGE_DELIVERY_MODE: ${BRIDGE_DELIVERY_MODE:-webhook}
       BRIDGE_POLL_INTERVAL: ${BRIDGE_POLL_INTERVAL:-5m}
+      # BRIDGE_SERVER_ID and BRIDGE_WEBHOOK_SECRET are auto-minted at
+      # first boot and persisted to /data/bridge/credentials.json. To
+      # rotate either, delete that file and restart — the marketplace
+      # will re-pair on the next user sign-in.
+      # BRIDGE_SUPABASE_URL / BRIDGE_SUPABASE_ANON_KEY are baked into
+      # the image; override at build time with --build-arg if you fork
+      # the project.
     restart: unless-stopped
