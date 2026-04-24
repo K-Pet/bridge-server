@@ -97,7 +97,6 @@ You only need to set **four lines**:
 | `BRIDGE_LABEL` | Friendly name shown in the marketplace UI ("Living Room", etc.). |
 | `BRIDGE_EXTERNAL_URL` | The HTTPS URL you'll expose in step 3. |
 | `BRIDGE_SUPABASE_SERVICE_KEY` | Operator-supplied (transitional — see callout below). |
-| `BRIDGE_SUPABASE_JWT_SECRET` | Operator-supplied (transitional — see callout below). |
 
 Auto-managed (don't set unless you know why):
 
@@ -108,14 +107,17 @@ Auto-managed (don't set unless you know why):
 - **`BRIDGE_SUPABASE_URL`** and **`BRIDGE_SUPABASE_ANON_KEY`** are baked
   into the public image. Operators forking for a different Supabase
   project pass `--build-arg` at `docker build` time.
+- **JWT verification** uses `${SUPABASE_URL}/auth/v1/user` — no shared
+  HMAC secret. `BRIDGE_SUPABASE_JWT_SECRET` is no longer required.
 
-> **Phase 2 will eliminate `SERVICE_KEY` and `JWT_SECRET`.** They're
-> currently required because bridge-server makes service-role writes
-> (auto-pair, mark-delivered) and verifies JWTs locally with the shared
-> HMAC secret. Phase 2 moves both behind Supabase Edge Functions so
-> end-users won't need to know or rotate them.
+> **Phase 2b will eliminate `SERVICE_KEY` too.** It's currently still
+> required because bridge-server makes service-role writes (auto-pair,
+> mark-delivered, signed storage URLs) via PostgREST. Phase 2b moves
+> these behind Edge Functions authenticated by the auto-minted
+> webhook_secret, after which the user-facing `.env` is just three
+> lines.
 
-> **Never commit `.env`.** The two transitional secrets above grant
+> **Never commit `.env`.** `BRIDGE_SUPABASE_SERVICE_KEY` grants
 > god-mode access to the Bridge Music Supabase project.
 
 ---

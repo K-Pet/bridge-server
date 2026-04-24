@@ -19,14 +19,14 @@ services:
       # docs/PRODUCTION_SETUP.md.
       BRIDGE_EXTERNAL_URL: ${BRIDGE_EXTERNAL_URL}
 
-      # ── Operator-supplied (Phase 2 will eliminate these) ────────────
-      # Supabase service-role key + JWT secret for the Bridge Music
-      # project. Currently required because bridge-server makes
-      # service-role writes (auto-pair, mark-delivered) and verifies
-      # JWTs locally with the shared HMAC secret. Phase 2 moves both
-      # behind Edge Functions so end-users won't see these vars.
+      # ── Operator-supplied (Phase 2b will eliminate this last one) ──
+      # Supabase service-role key for the Bridge Music project.
+      # Currently still required because bridge-server makes service-
+      # role writes (auto-pair, mark-delivered, signed-storage-URLs)
+      # via PostgREST. Phase 2b moves these behind Edge Functions
+      # authenticated by the auto-minted webhook_secret, after which
+      # this var goes away too.
       BRIDGE_SUPABASE_SERVICE_KEY: ${BRIDGE_SUPABASE_SERVICE_KEY}
-      BRIDGE_SUPABASE_JWT_SECRET: ${BRIDGE_SUPABASE_JWT_SECRET}
 
       # ── Auto-managed (do not set unless you know why) ──────────────
       # Delivery: webhook (push, default) or poll. Use poll if you
