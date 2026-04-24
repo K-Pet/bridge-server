@@ -17,7 +17,12 @@ type Config struct {
 	SupabaseAnonKey    string
 	SupabaseServiceKey string
 	SupabaseJWTSecret  string
-	WebhookSecret      string
+
+	// WebhookSecret authenticates marketplace → bridge-server webhook
+	// deliveries. Auto-minted at first boot in production (persisted to
+	// ${BRIDGE_DATA}/credentials.json with 0600); env-supplied values
+	// still win for advanced/dev workflows.
+	WebhookSecret string
 
 	DeliveryMode string
 	PollInterval time.Duration
@@ -25,7 +30,8 @@ type Config struct {
 	// ServerID identifies this home server to Supabase in poll mode — the
 	// marketplace writes purchases with `server_id = <this>` and the poller
 	// picks them up. In webhook mode Supabase uses this to route the HTTP
-	// callback. Must be unique per user-installed home server.
+	// callback. Auto-minted at first boot in production and persisted in
+	// the same credentials.json as WebhookSecret.
 	ServerID string
 
 	MasterSecret string
@@ -83,15 +89,17 @@ func Load() (*Config, error) {
 		DevPassword:        envStr("BRIDGE_DEV_PASSWORD", "testpass123"),
 	}
 
+	// Auto-mint per-server identity if not handed in via env. Stays
+	// gated on !DevMode so `tilt up` keeps the stable `local-dev`
+	// ServerID and doesn't drop a credentials.json into the dev data
+	// dir (where it would survive `rm -rf data/` resets and confuse
+	// the marketplace's user_home_servers row by user_id).
 	if !cfg.DevMode {
+		if err := loadOrMintCredentials(cfg); err != nil {
+			return nil, fmt.Errorf("credentials: %w", err)
+		}
 		if cfg.SupabaseURL == "" {
 			return nil, fmt.Errorf("BRIDGE_SUPABASE_URL is required")
-		}
-		if cfg.WebhookSecret == "" && cfg.DeliveryMode == "webhook" {
-			return nil, fmt.Errorf("BRIDGE_WEBHOOK_SECRET is required in webhook mode")
-		}
-		if cfg.ServerID == "" && cfg.DeliveryMode == "poll" {
-			return nil, fmt.Errorf("BRIDGE_SERVER_ID is required in poll mode")
 		}
 	}
 	if cfg.DevMode && cfg.ServerID == "" {
