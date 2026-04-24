@@ -1,0 +1,6 @@
+#!/command/with-contenv sh
+# Wait for Navidrome's health endpoint before starting
+until wget -q --spider http://127.0.0.1:4533/ping 2>/dev/null; do
+  sleep 0.5
+done
+exec /app/bridge-server

@@ -1,5 +1,5 @@
-# Binaries
-bridge-server
+# Binaries — anchor to repo root so cmd/bridge-server/ source still tracks
+/bridge-server
 *.exe
 *.wasm
 
