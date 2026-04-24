@@ -13,7 +13,14 @@ import (
 	"github.com/bridgemusic/bridge-server/web"
 )
 
-func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue, hub *EventHub, sc *supabase.Client) http.Handler {
+func NewRouter(
+	cfg *config.Config,
+	nd *navidrome.Client,
+	queue *store.Queue,
+	hub *EventHub,
+	sc *supabase.Client,
+	verifier *supabase.AuthVerifier,
+) http.Handler {
 	mux := http.NewServeMux()
 
 	// Health check (unauthenticated)
@@ -39,7 +46,7 @@ func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue, hub
 	// the standard Authorization header. Registered outside the auth
 	// middleware mux so it can handle both paths itself.
 	if hub != nil {
-		mux.HandleFunc("GET /api/events", handleEvents(hub, cfg))
+		mux.HandleFunc("GET /api/events", handleEvents(hub, cfg, verifier))
 	}
 
 	// Authenticated Bridge API routes
@@ -63,7 +70,7 @@ func NewRouter(cfg *config.Config, nd *navidrome.Client, queue *store.Queue, hub
 	authed.HandleFunc("POST /api/auto-pair", handleAutoPair(sc))
 	authed.HandleFunc("GET /api/pair/status", handlePairStatus(sc))
 
-	mux.Handle("/api/", auth.Middleware(cfg.SupabaseJWTSecret)(authed))
+	mux.Handle("/api/", auth.Middleware(verifier)(authed))
 
 	// Reverse proxy to Navidrome (with credential injection)
 	if nd != nil {

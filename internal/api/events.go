@@ -68,7 +68,7 @@ func (h *EventHub) unsubscribe(ch chan Event) {
 // Auth: EventSource cannot set custom headers, so this endpoint accepts the
 // JWT via a ?token= query parameter in addition to the standard Authorization
 // header. In dev mode, unauthenticated connections are allowed.
-func handleEvents(hub *EventHub, cfg *config.Config) http.HandlerFunc {
+func handleEvents(hub *EventHub, cfg *config.Config, verifier *supabase.AuthVerifier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Inline auth — check Bearer header first, then ?token= query param.
 		token := ""
@@ -83,7 +83,11 @@ func handleEvents(hub *EventHub, cfg *config.Config) http.HandlerFunc {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			if _, err := supabase.VerifyJWT(token, cfg.SupabaseJWTSecret); err != nil {
+			if verifier == nil {
+				http.Error(w, "auth not configured", http.StatusServiceUnavailable)
+				return
+			}
+			if _, err := verifier.VerifyToken(r.Context(), token); err != nil {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
 			}

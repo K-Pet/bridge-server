@@ -12,17 +12,18 @@ type contextKey string
 
 const userIDKey contextKey = "user_id"
 
-// Middleware extracts and verifies the Supabase JWT from the Authorization
-// header. Used in both dev and prod — the frontend always authenticates via
-// Supabase (dev auto-signs-in with seeded credentials).
+// Middleware extracts and verifies the Supabase JWT on the Authorization
+// header, populating the request context with the resolved user id.
 //
-// If jwtSecret is empty (Supabase not configured), all requests pass through
-// without a user ID — handlers must tolerate an empty UserID in that case.
-func Middleware(jwtSecret string) func(http.Handler) http.Handler {
+// Verification goes through ${SUPABASE_URL}/auth/v1/user (see
+// supabase.AuthVerifier) so bridge-server doesn't need a copy of the
+// project's JWT secret. Pass a nil verifier when Supabase isn't
+// configured (dev mode without a Supabase stack) — requests then pass
+// through unauthenticated and handlers must tolerate an empty UserID.
+func Middleware(verifier *supabase.AuthVerifier) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// No JWT secret → Supabase not configured, pass through.
-			if jwtSecret == "" {
+			if verifier == nil {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -34,7 +35,7 @@ func Middleware(jwtSecret string) func(http.Handler) http.Handler {
 			}
 			token := strings.TrimPrefix(authHeader, "Bearer ")
 
-			userID, err := supabase.VerifyJWT(token, jwtSecret)
+			userID, err := verifier.VerifyToken(r.Context(), token)
 			if err != nil {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
