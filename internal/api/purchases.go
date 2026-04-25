@@ -18,38 +18,49 @@ import (
 	"github.com/bridgemusic/bridge-server/internal/store"
 )
 
+// All Supabase calls in this file run with the user's forwarded JWT
+// (via bearerToken from onboarding.go) plus the project anon key.
+// PostgREST queries hit RLS, which on these tables permits:
+//
+//   - purchases / purchase_items: SELECT WHERE user_id = auth.uid()
+//   - tracks / albums:            public SELECT (catalog rows)
+//   - purchase_tracks (view):     security_invoker, follows the above
+//
+// Storage URL signing for the `tracks` private bucket can't go through
+// RLS — it's a bucket-level permission that requires service-role.
+// That work runs through marketplace's get-download-urls Edge Function
+// (extended in Phase 2b to accept track_ids[]) which signs server-side
+// using its own service role and returns short-lived URLs.
+
 func handlePurchases(cfg *config.Config, queue *store.Queue) http.HandlerFunc {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID := auth.UserID(r.Context())
+		jwt := bearerToken(r)
 		if userID == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		if cfg.SupabaseURL == "" || cfg.SupabaseServiceKey == "" {
+		if cfg.SupabaseURL == "" || cfg.SupabaseAnonKey == "" {
 			json.NewEncoder(w).Encode([]any{})
 			return
 		}
 
-		// Embed album + track titles so the Purchases page can render item names
-		// without a second round-trip. PostgREST nests foreign key relationships
-		// via `fk_column(select)` syntax.
-		// Expand album purchases into their tracks (nested `tracks(...)` under
-		// the `albums` relationship) so each purchased track gets its own row
-		// in the UI and a corresponding per-track download button.
-		queryURL := fmt.Sprintf(
-			"%s/rest/v1/purchases?user_id=eq.%s"+
-				"&select=id,total_cents,status,payment_ref,created_at,"+
-				"purchase_items(id,track_id,album_id,price_cents,"+
-				"track:tracks(id,title,artist,album_id,format,disc_number,album_index),"+
-				"album:albums(id,title,artist,cover_art_url,"+
-				"tracks(id,title,artist,format,disc_number,album_index)))"+
-				"&order=created_at.desc&limit=200",
-			cfg.SupabaseURL, userID,
-		)
+		// Embed album + track titles so the Purchases page can render
+		// item names without a second round-trip. RLS gates rows to
+		// the caller's own purchases (user_id = auth.uid()), so a
+		// no-filter SELECT here is safe — equivalent to the explicit
+		// user_id=eq filter the previous service-role version had.
+		queryURL := cfg.SupabaseURL + "/rest/v1/purchases?" +
+			"select=id,total_cents,status,payment_ref,created_at," +
+			"purchase_items(id,track_id,album_id,price_cents," +
+			"track:tracks(id,title,artist,album_id,format,disc_number,album_index)," +
+			"album:albums(id,title,artist,cover_art_url," +
+			"tracks(id,title,artist,format,disc_number,album_index)))" +
+			"&order=created_at.desc&limit=200"
 
 		req, err := http.NewRequestWithContext(r.Context(), "GET", queryURL, nil)
 		if err != nil {
@@ -57,8 +68,8 @@ func handlePurchases(cfg *config.Config, queue *store.Queue) http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		req.Header.Set("apikey", cfg.SupabaseServiceKey)
-		req.Header.Set("Authorization", "Bearer "+cfg.SupabaseServiceKey)
+		req.Header.Set("apikey", cfg.SupabaseAnonKey)
+		req.Header.Set("Authorization", "Bearer "+jwt)
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -75,7 +86,6 @@ func handlePurchases(cfg *config.Config, queue *store.Queue) http.HandlerFunc {
 			return
 		}
 
-		// Parse into generic maps so we can inject per-purchase delivery info
 		var rows []map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
 			slog.Error("failed to decode purchases", "error", err)
@@ -99,8 +109,6 @@ func handlePurchases(cfg *config.Config, queue *store.Queue) http.HandlerFunc {
 					if s, ok := summaries[id]; ok {
 						row["delivery"] = s
 					} else {
-						// No local tasks: either delivered long ago, or the
-						// server hasn't received a webhook for it yet.
 						row["delivery"] = map[string]any{"total": 0}
 					}
 				}
@@ -111,15 +119,17 @@ func handlePurchases(cfg *config.Config, queue *store.Queue) http.HandlerFunc {
 	}
 }
 
-// handleRedeliver resets the local task queue for a purchase and re-invokes the
-// Supabase deliver-purchase Edge Function so tracks are re-downloaded. Useful
-// when a file has been deleted from disk or the initial delivery got stuck.
+// handleRedeliver resets the local task queue for a purchase and re-
+// invokes the marketplace's retry-purchase-delivery Edge Function so
+// tracks are re-downloaded. retry-purchase-delivery is the user-JWT
+// twin of deliver-purchase — it verifies ownership and fans out.
 func handleRedeliver(cfg *config.Config, queue *store.Queue) http.HandlerFunc {
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID := auth.UserID(r.Context())
-		if userID == "" {
+		jwt := bearerToken(r)
+		if userID == "" || jwt == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -130,46 +140,73 @@ func handleRedeliver(cfg *config.Config, queue *store.Queue) http.HandlerFunc {
 			return
 		}
 
-		// Verify ownership: look up the purchase and confirm user_id matches
-		if err := verifyPurchaseOwner(r.Context(), client, cfg, purchaseID, userID); err != nil {
+		// Ownership check via PostgREST + user JWT — RLS gates the
+		// row to the caller's own purchase, so a 0-row response
+		// means they don't own it.
+		if err := verifyPurchaseOwner(r.Context(), client, cfg, jwt, purchaseID); err != nil {
 			slog.Warn("redeliver: ownership check failed", "purchase", purchaseID, "user", userID, "error", err)
 			http.Error(w, "purchase not found", http.StatusNotFound)
 			return
 		}
 
-		// Clear local queue entries so deliver-purchase can re-enqueue fresh tasks
+		// Clear local queue entries so retry-purchase-delivery can
+		// re-enqueue fresh tasks.
 		if queue != nil {
 			if err := queue.DeleteTasksForPurchase(purchaseID); err != nil {
 				slog.Warn("redeliver: failed to clear tasks", "purchase", purchaseID, "error", err)
 			}
 		}
 
-		// Reset purchase status to pending so the reconcile loop can update it again
-		if err := patchPurchaseStatus(r.Context(), client, cfg, purchaseID, "pending"); err != nil {
-			slog.Warn("redeliver: status reset failed", "purchase", purchaseID, "error", err)
-		}
-
-		// Fire the Edge Function — same entry point used by the initial purchase flow
-		deliveryErr := triggerDelivery(r.Context(), client, cfg, purchaseID)
+		// retry-purchase-delivery flips status to delivering and
+		// invokes deliver-purchase internally with service role. We
+		// just forward the user JWT.
+		deliveryErr := invokeRetryDelivery(r.Context(), client, cfg, jwt, purchaseID)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"purchase_id":    purchaseID,
-			"status":         "pending",
+			"status":         "delivering",
 			"delivery_error": errString(deliveryErr),
 		})
 	}
 }
 
-// handleTrackDownload returns a fresh Supabase Storage signed URL for a track
-// the user owns. The browser opens the URL directly (no proxy), so the user
-// gets a native browser download at full speed.
+// invokeRetryDelivery POSTs to retry-purchase-delivery with the
+// user's JWT — replaces the old deliver-purchase + service-role path.
+func invokeRetryDelivery(ctx context.Context, client *http.Client, cfg *config.Config, jwt, purchaseID string) error {
+	body, _ := json.Marshal(map[string]string{"purchase_id": purchaseID})
+	reqURL := cfg.SupabaseURL + "/functions/v1/retry-purchase-delivery"
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build retry request: %w", err)
+	}
+	req.Header.Set("apikey", cfg.SupabaseAnonKey)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("retry-purchase-delivery unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("retry-purchase-delivery %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// handleTrackDownload returns a fresh signed URL for a single track
+// the user owns. Authorization happens server-side inside
+// get-download-urls — we just forward the user JWT.
 func handleTrackDownload(cfg *config.Config) http.HandlerFunc {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID := auth.UserID(r.Context())
-		if userID == "" {
+		jwt := bearerToken(r)
+		if userID == "" || jwt == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -180,152 +217,91 @@ func handleTrackDownload(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
-		// Ownership: either the track or its parent album must be in entitlements
-		_, ownedTracks, err := fetchEntitlements(r.Context(), client, cfg, userID)
+		signed, err := getDownloadURLs(r.Context(), client, cfg, jwt, []string{trackID})
 		if err != nil {
-			slog.Error("download: entitlement check failed", "error", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if !contains(ownedTracks, trackID) {
-			writeJSONError(w, http.StatusForbidden, "not_owned", "You do not own this track.")
-			return
-		}
-
-		// Look up the storage path + a human-friendly filename
-		meta, err := fetchTrackStorage(r.Context(), client, cfg, trackID)
-		if err != nil {
-			slog.Error("download: track lookup failed", "track", trackID, "error", err)
-			http.Error(w, "track not found", http.StatusNotFound)
-			return
-		}
-		if meta.StoragePath == "" {
-			http.Error(w, "track has no storage path", http.StatusNotFound)
-			return
-		}
-
-		filename := buildFilename(meta.Artist, meta.Title, meta.Format)
-
-		// Pass the desired filename so Supabase Storage attaches a
-		// Content-Disposition: attachment header — this makes the browser
-		// download the file directly instead of opening an inline player.
-		signedURL, err := createSignedURL(r.Context(), client, cfg, meta.StoragePath, filename)
-		if err != nil {
-			slog.Error("download: signed URL failed", "track", trackID, "error", err)
+			slog.Error("download: get-download-urls failed", "track", trackID, "error", err)
 			http.Error(w, "failed to generate download link", http.StatusInternalServerError)
 			return
 		}
+		if len(signed) == 0 {
+			writeJSONError(w, http.StatusForbidden, "not_owned", "You do not own this track.")
+			return
+		}
+		first := signed[0]
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
-			"url":      signedURL,
-			"filename": filename,
+			"url":      first.DownloadURL,
+			"filename": buildFilename(first.Artist, first.Title, first.Format),
 		})
 	}
 }
 
-type trackMeta struct {
-	ID          string `json:"id"`
+// signedTrack mirrors the wire shape of a single get-download-urls
+// item — same fields the EF returns whether you ask by purchase_id,
+// track_ids, or album_id-resolved-via-track_ids.
+type signedTrack struct {
+	TrackID     string `json:"track_id"`
 	Title       string `json:"title"`
 	Artist      string `json:"artist"`
-	StoragePath string `json:"storage_path"`
 	Format      string `json:"format"`
+	SizeBytes   int64  `json:"size_bytes"`
+	SHA256      string `json:"sha256"`
+	DownloadURL string `json:"download_url"`
 }
 
-func fetchTrackStorage(ctx context.Context, client *http.Client, cfg *config.Config, trackID string) (*trackMeta, error) {
-	queryURL := fmt.Sprintf("%s/rest/v1/tracks?id=eq.%s&select=id,title,artist,storage_path,format", cfg.SupabaseURL, trackID)
-	req, _ := http.NewRequestWithContext(ctx, "GET", queryURL, nil)
-	req.Header.Set("apikey", cfg.SupabaseServiceKey)
-	req.Header.Set("Authorization", "Bearer "+cfg.SupabaseServiceKey)
-
-	resp, err := client.Do(req)
+// getDownloadURLs calls the marketplace's get-download-urls Edge
+// Function with the user JWT and an explicit list of track ids. The
+// EF verifies each id belongs to one of the user's purchases and
+// returns signed URLs for the ones it owns (silently dropping the
+// rest).
+func getDownloadURLs(ctx context.Context, client *http.Client, cfg *config.Config, jwt string, trackIDs []string) ([]signedTrack, error) {
+	body, _ := json.Marshal(map[string]any{"track_ids": trackIDs})
+	reqURL := cfg.SupabaseURL + "/functions/v1/get-download-urls"
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("track fetch failed: %d %s", resp.StatusCode, string(body))
-	}
-	var rows []trackMeta
-	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return nil, fmt.Errorf("track not found")
-	}
-	return &rows[0], nil
-}
-
-// createSignedURL asks Supabase Storage to mint a signed URL for the given path.
-// Uses the REST API directly — equivalent to supabase.storage.from(bucket).createSignedUrl.
-// If downloadFilename is non-empty, the returned URL gets a `?download=<name>`
-// query parameter so Supabase Storage responds with a Content-Disposition
-// attachment header, forcing the browser to download instead of inlining.
-func createSignedURL(ctx context.Context, client *http.Client, cfg *config.Config, storagePath, downloadFilename string) (string, error) {
-	body := []byte(`{"expiresIn":3600}`)
-	// Encode each path segment separately so slashes stay as slashes. Using
-	// url.PathEscape on the full path would turn "/" into "%2F", which makes
-	// Supabase sign the escaped path while the browser later requests the
-	// unescaped one, causing InvalidSignature failures.
-	endpoint := fmt.Sprintf("%s/storage/v1/object/sign/tracks/%s", cfg.SupabaseURL, escapePathSegments(storagePath))
-	req, _ := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
-	req.Header.Set("apikey", cfg.SupabaseServiceKey)
-	req.Header.Set("Authorization", "Bearer "+cfg.SupabaseServiceKey)
+	req.Header.Set("apikey", cfg.SupabaseAnonKey)
+	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("get-download-urls unreachable: %w", err)
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("sign failed: %d %s", resp.StatusCode, string(respBody))
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("get-download-urls %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	var signed struct {
-		SignedURL string `json:"signedURL"`
-		URL       string `json:"url"`
+	var out struct {
+		Tracks []signedTrack `json:"tracks"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&signed); err != nil {
-		return "", err
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
 	}
-	path := signed.SignedURL
-	if path == "" {
-		path = signed.URL
-	}
-	if path == "" {
-		return "", fmt.Errorf("empty signed URL")
-	}
-	// Normalize: the Storage API returns a path like "/object/sign/..."; prepend the base URL + /storage/v1
-	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-		return path, nil
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	full := cfg.SupabaseURL + "/storage/v1" + path
-	if downloadFilename != "" {
-		sep := "?"
-		if strings.Contains(full, "?") {
-			sep = "&"
-		}
-		full += sep + "download=" + url.QueryEscape(downloadFilename)
-	}
-	return full, nil
+	return out.Tracks, nil
 }
 
-// handleAlbumZip streams a ZIP of every track in an album the caller owns.
-// Files are fetched from Supabase Storage server-side and written directly to
-// the response — nothing is buffered to disk.
+// handleAlbumZip streams a ZIP of every track in an album the caller
+// owns. Files are fetched from Supabase Storage server-side via signed
+// URLs and written directly to the response — nothing buffered to
+// disk.
+//
+// Album → tracks resolution lives in two steps now: (1) public RLS
+// SELECT against `tracks.album_id` lists the tracks in the album,
+// (2) get-download-urls drops the ones the caller doesn't own.
 func handleAlbumZip(cfg *config.Config) http.HandlerFunc {
-	// Long timeout: a full album of FLACs can be hundreds of MB.
+	// Long timeout: a full FLAC album can be hundreds of MB.
 	client := &http.Client{Timeout: 10 * time.Minute}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID := auth.UserID(r.Context())
-		if userID == "" {
+		jwt := bearerToken(r)
+		if userID == "" || jwt == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -336,16 +312,7 @@ func handleAlbumZip(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
-		// Ownership: either album-level entitlement, OR every track in the
-		// album is individually owned. Album-level is the common case.
-		ownedAlbums, ownedTracks, err := fetchEntitlements(r.Context(), client, cfg, userID)
-		if err != nil {
-			slog.Error("zip: entitlement check failed", "error", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-
-		album, tracks, err := fetchAlbumWithTracks(r.Context(), client, cfg, albumID)
+		album, tracks, err := fetchAlbumWithTracks(r.Context(), client, cfg, jwt, albumID)
 		if err != nil {
 			slog.Error("zip: album fetch failed", "album", albumID, "error", err)
 			http.Error(w, "album not found", http.StatusNotFound)
@@ -356,14 +323,30 @@ func handleAlbumZip(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
-		ownsAlbum := contains(ownedAlbums, albumID)
-		if !ownsAlbum {
-			for _, t := range tracks {
-				if !contains(ownedTracks, t.ID) {
-					writeJSONError(w, http.StatusForbidden, "not_owned", "You do not own this album.")
-					return
-				}
-			}
+		// Sort by disc / index before signing so the zip preserves
+		// album order without depending on EF response order.
+		sortZipTracks(tracks)
+
+		ids := make([]string, 0, len(tracks))
+		for _, t := range tracks {
+			ids = append(ids, t.ID)
+		}
+		signed, err := getDownloadURLs(r.Context(), client, cfg, jwt, ids)
+		if err != nil {
+			slog.Error("zip: get-download-urls failed", "album", albumID, "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if len(signed) == 0 {
+			writeJSONError(w, http.StatusForbidden, "not_owned", "You do not own this album.")
+			return
+		}
+
+		// Build a track_id → signed-track map so we can keep our
+		// pre-sorted order while pulling URLs from the EF response.
+		signedByID := make(map[string]signedTrack, len(signed))
+		for _, s := range signed {
+			signedByID[s.TrackID] = s
 		}
 
 		zipName := buildFilename(album.Artist, album.Title, "zip")
@@ -374,14 +357,16 @@ func handleAlbumZip(cfg *config.Config) http.HandlerFunc {
 		defer zw.Close()
 
 		for _, t := range tracks {
-			if t.StoragePath == "" {
-				slog.Warn("zip: track missing storage path, skipping", "track", t.ID)
+			s, owned := signedByID[t.ID]
+			if !owned || s.DownloadURL == "" {
+				// Track not owned (or sign failed) — skip rather
+				// than 403 the whole album response. The user gets
+				// a partial zip of the parts they bought.
+				slog.Warn("zip: skipping unowned/unsigned track", "track", t.ID, "album", albumID)
 				continue
 			}
-			if err := streamTrackIntoZip(r.Context(), client, cfg, zw, t); err != nil {
+			if err := streamTrackIntoZip(r.Context(), client, zw, t, s); err != nil {
 				slog.Error("zip: failed to add track", "track", t.ID, "error", err)
-				// Stop here — we've already started writing the zip, can't
-				// switch to an HTTP error. The partial zip is still valid.
 				return
 			}
 		}
@@ -395,23 +380,25 @@ type albumMeta struct {
 }
 
 type zipTrack struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Artist      string `json:"artist"`
-	StoragePath string `json:"storage_path"`
-	Format      string `json:"format"`
-	DiscNumber  *int   `json:"disc_number"`
-	AlbumIndex  *int   `json:"album_index"`
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Artist     string `json:"artist"`
+	Format     string `json:"format"`
+	DiscNumber *int   `json:"disc_number"`
+	AlbumIndex *int   `json:"album_index"`
 }
 
-func fetchAlbumWithTracks(ctx context.Context, client *http.Client, cfg *config.Config, albumID string) (*albumMeta, []zipTrack, error) {
+// fetchAlbumWithTracks reads the album row + its tracks via the user
+// JWT. albums + tracks have public RLS so anon-key + JWT is fine —
+// no service role needed.
+func fetchAlbumWithTracks(ctx context.Context, client *http.Client, cfg *config.Config, jwt, albumID string) (*albumMeta, []zipTrack, error) {
 	queryURL := fmt.Sprintf(
-		"%s/rest/v1/albums?id=eq.%s&select=id,title,artist,tracks(id,title,artist,storage_path,format,disc_number,album_index)",
+		"%s/rest/v1/albums?id=eq.%s&select=id,title,artist,tracks(id,title,artist,format,disc_number,album_index)",
 		cfg.SupabaseURL, albumID,
 	)
 	req, _ := http.NewRequestWithContext(ctx, "GET", queryURL, nil)
-	req.Header.Set("apikey", cfg.SupabaseServiceKey)
-	req.Header.Set("Authorization", "Bearer "+cfg.SupabaseServiceKey)
+	req.Header.Set("apikey", cfg.SupabaseAnonKey)
+	req.Header.Set("Authorization", "Bearer "+jwt)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -433,11 +420,7 @@ func fetchAlbumWithTracks(ctx context.Context, client *http.Client, cfg *config.
 	if len(rows) == 0 {
 		return nil, nil, fmt.Errorf("album not found")
 	}
-	tracks := rows[0].Tracks
-	// Stable ordering: disc, then album index. The library's order matters so
-	// the zip listing matches the album track listing.
-	sortZipTracks(tracks)
-	return &rows[0].albumMeta, tracks, nil
+	return &rows[0].albumMeta, rows[0].Tracks, nil
 }
 
 func sortZipTracks(tracks []zipTrack) {
@@ -461,13 +444,8 @@ func sortZipTracks(tracks []zipTrack) {
 	}
 }
 
-func streamTrackIntoZip(ctx context.Context, client *http.Client, cfg *config.Config, zw *zip.Writer, t zipTrack) error {
-	signedURL, err := createSignedURL(ctx, client, cfg, t.StoragePath, "")
-	if err != nil {
-		return fmt.Errorf("sign: %w", err)
-	}
-
-	req, _ := http.NewRequestWithContext(ctx, "GET", signedURL, nil)
+func streamTrackIntoZip(ctx context.Context, client *http.Client, zw *zip.Writer, t zipTrack, s signedTrack) error {
+	req, _ := http.NewRequestWithContext(ctx, "GET", s.DownloadURL, nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("fetch: %w", err)
@@ -478,7 +456,6 @@ func streamTrackIntoZip(ctx context.Context, client *http.Client, cfg *config.Co
 		return fmt.Errorf("fetch status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Prefix with track number so the zip preserves album order on disk.
 	prefix := ""
 	if t.AlbumIndex != nil {
 		prefix = fmt.Sprintf("%02d - ", *t.AlbumIndex)
@@ -495,11 +472,15 @@ func streamTrackIntoZip(ctx context.Context, client *http.Client, cfg *config.Co
 	return nil
 }
 
-func verifyPurchaseOwner(ctx context.Context, client *http.Client, cfg *config.Config, purchaseID, userID string) error {
-	queryURL := fmt.Sprintf("%s/rest/v1/purchases?id=eq.%s&select=user_id", cfg.SupabaseURL, purchaseID)
+// verifyPurchaseOwner checks via PostgREST + user JWT that the
+// caller owns the purchase. RLS on `purchases` only returns the row
+// if user_id = auth.uid(), so a 0-row response means the caller
+// either doesn't own it or it doesn't exist (we treat both as 404).
+func verifyPurchaseOwner(ctx context.Context, client *http.Client, cfg *config.Config, jwt, purchaseID string) error {
+	queryURL := fmt.Sprintf("%s/rest/v1/purchases?id=eq.%s&select=id", cfg.SupabaseURL, purchaseID)
 	req, _ := http.NewRequestWithContext(ctx, "GET", queryURL, nil)
-	req.Header.Set("apikey", cfg.SupabaseServiceKey)
-	req.Header.Set("Authorization", "Bearer "+cfg.SupabaseServiceKey)
+	req.Header.Set("apikey", cfg.SupabaseAnonKey)
+	req.Header.Set("Authorization", "Bearer "+jwt)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -510,7 +491,7 @@ func verifyPurchaseOwner(ctx context.Context, client *http.Client, cfg *config.C
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}
 	var rows []struct {
-		UserID string `json:"user_id"`
+		ID string `json:"id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
 		return err
@@ -518,37 +499,14 @@ func verifyPurchaseOwner(ctx context.Context, client *http.Client, cfg *config.C
 	if len(rows) == 0 {
 		return fmt.Errorf("purchase not found")
 	}
-	if rows[0].UserID != userID {
-		return fmt.Errorf("purchase owned by another user")
-	}
 	return nil
 }
 
-func patchPurchaseStatus(ctx context.Context, client *http.Client, cfg *config.Config, purchaseID, status string) error {
-	body := []byte(fmt.Sprintf(`{"status":%q}`, status))
-	endpoint := fmt.Sprintf("%s/rest/v1/purchases?id=eq.%s", cfg.SupabaseURL, purchaseID)
-	req, _ := http.NewRequestWithContext(ctx, "PATCH", endpoint, bytes.NewReader(body))
-	req.Header.Set("apikey", cfg.SupabaseServiceKey)
-	req.Header.Set("Authorization", "Bearer "+cfg.SupabaseServiceKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("status %d %s", resp.StatusCode, string(respBody))
-	}
-	return nil
-}
-
-// escapePathSegments URL-encodes each "/"-separated segment of a storage path
-// while preserving the slashes themselves. Supabase Storage signs the literal
-// path it receives, so escaping the full path (which would turn "/" into
-// "%2F") causes InvalidSignature when the browser later fetches the URL with
-// unescaped slashes.
+// escapePathSegments URL-encodes each "/"-separated segment of a
+// storage path while preserving the slashes themselves. Kept here in
+// case future code re-introduces direct storage signing — the
+// Phase 2b refactor moves all signing into get-download-urls so
+// nothing in this file calls it today.
 func escapePathSegments(p string) string {
 	segments := strings.Split(p, "/")
 	for i, s := range segments {
@@ -557,12 +515,14 @@ func escapePathSegments(p string) string {
 	return strings.Join(segments, "/")
 }
 
+// _ keeps escapePathSegments compiled if other files start using it.
+var _ = escapePathSegments
+
 func buildFilename(artist, title, format string) string {
 	name := title
 	if artist != "" {
 		name = artist + " - " + title
 	}
-	// Strip filesystem-unsafe characters so Content-Disposition parses cleanly
 	for _, bad := range []string{"/", "\\", "\"", "\x00"} {
 		name = strings.ReplaceAll(name, bad, "_")
 	}
@@ -572,24 +532,25 @@ func buildFilename(artist, title, format string) string {
 	return name
 }
 
-// handleEntitlements returns the set of album_ids and track_ids the user has
-// purchased. Tracks belonging to a purchased album are expanded and included
-// in track_ids so the marketplace can show "Owned" on both the album and its
-// individual tracks without extra client-side joins.
+// handleEntitlements returns the album_ids and track_ids the user has
+// purchased. Tracks belonging to a purchased album are expanded so
+// the marketplace UI can show "Owned" on both album and track without
+// extra client-side joins.
 func handleEntitlements(cfg *config.Config) http.HandlerFunc {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID := auth.UserID(r.Context())
+		jwt := bearerToken(r)
 		w.Header().Set("Content-Type", "application/json")
 
 		empty := map[string]any{"album_ids": []string{}, "track_ids": []string{}}
-		if userID == "" || cfg.SupabaseURL == "" || cfg.SupabaseServiceKey == "" {
+		if userID == "" || jwt == "" || cfg.SupabaseURL == "" || cfg.SupabaseAnonKey == "" {
 			json.NewEncoder(w).Encode(empty)
 			return
 		}
 
-		albumIDs, trackIDs, err := fetchEntitlements(r.Context(), client, cfg, userID)
+		albumIDs, trackIDs, err := fetchEntitlements(r.Context(), client, cfg, jwt)
 		if err != nil {
 			slog.Error("failed to fetch entitlements", "error", err)
 			json.NewEncoder(w).Encode(empty)
@@ -603,20 +564,23 @@ func handleEntitlements(cfg *config.Config) http.HandlerFunc {
 	}
 }
 
-// fetchEntitlements returns deduped album_ids + track_ids the user owns.
-// Tracks belonging to a purchased album are included in track_ids.
-func fetchEntitlements(ctx context.Context, client *http.Client, cfg *config.Config, userID string) ([]string, []string, error) {
-	// Purchase items (direct ownership)
-	itemsURL := fmt.Sprintf(
-		"%s/rest/v1/purchase_items?select=track_id,album_id,purchase:purchases!inner(user_id,status)&purchase.user_id=eq.%s&limit=5000",
-		cfg.SupabaseURL, userID,
-	)
+// fetchEntitlements returns deduped album_ids + track_ids the user
+// owns. Reads from purchase_items (RLS joined to purchases by
+// user_id), then expands album entitlements to per-track ids via the
+// public-RLS tracks table.
+func fetchEntitlements(ctx context.Context, client *http.Client, cfg *config.Config, jwt string) ([]string, []string, error) {
+	// Embed the parent purchase via PostgREST's `!inner` foreign-key
+	// hint so the RLS filter on purchases applies — purchase_items
+	// itself doesn't carry user_id.
+	itemsURL := cfg.SupabaseURL +
+		"/rest/v1/purchase_items?select=track_id,album_id," +
+		"purchase:purchases!inner(user_id,status)&limit=5000"
 	req, err := http.NewRequestWithContext(ctx, "GET", itemsURL, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build entitlements request: %w", err)
 	}
-	req.Header.Set("apikey", cfg.SupabaseServiceKey)
-	req.Header.Set("Authorization", "Bearer "+cfg.SupabaseServiceKey)
+	req.Header.Set("apikey", cfg.SupabaseAnonKey)
+	req.Header.Set("Authorization", "Bearer "+jwt)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -648,13 +612,12 @@ func fetchEntitlements(ctx context.Context, client *http.Client, cfg *config.Con
 		}
 	}
 
-	// Expand album purchases to their tracks so per-track "Owned" works
 	if len(albumSet) > 0 {
 		ids := make([]string, 0, len(albumSet))
 		for id := range albumSet {
 			ids = append(ids, id)
 		}
-		expandedTracks, err := fetchTrackIDsForAlbums(ctx, client, cfg, ids)
+		expandedTracks, err := fetchTrackIDsForAlbums(ctx, client, cfg, jwt, ids)
 		if err != nil {
 			slog.Warn("failed to expand album tracks for entitlements", "error", err)
 		} else {
@@ -675,7 +638,7 @@ func fetchEntitlements(ctx context.Context, client *http.Client, cfg *config.Con
 	return albumIDs, trackIDs, nil
 }
 
-func fetchTrackIDsForAlbums(ctx context.Context, client *http.Client, cfg *config.Config, albumIDs []string) ([]string, error) {
+func fetchTrackIDsForAlbums(ctx context.Context, client *http.Client, cfg *config.Config, jwt string, albumIDs []string) ([]string, error) {
 	if len(albumIDs) == 0 {
 		return nil, nil
 	}
@@ -693,8 +656,8 @@ func fetchTrackIDsForAlbums(ctx context.Context, client *http.Client, cfg *confi
 	if err != nil {
 		return nil, fmt.Errorf("build track expansion request: %w", err)
 	}
-	req.Header.Set("apikey", cfg.SupabaseServiceKey)
-	req.Header.Set("Authorization", "Bearer "+cfg.SupabaseServiceKey)
+	req.Header.Set("apikey", cfg.SupabaseAnonKey)
+	req.Header.Set("Authorization", "Bearer "+jwt)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -728,9 +691,6 @@ func handleConfig(cfg *config.Config) http.HandlerFunc {
 			"dev_mode":          cfg.DevMode,
 			"marketplace_url":   cfg.MarketplaceURL,
 		}
-		// Expose test credentials in dev mode so the frontend can auto-
-		// sign-in and forward a real Supabase session to the marketplace
-		// iframe. Never served in production.
 		if cfg.DevMode && cfg.DevEmail != "" {
 			payload["dev_email"] = cfg.DevEmail
 			payload["dev_password"] = cfg.DevPassword
