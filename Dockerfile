@@ -10,7 +10,9 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- Stage 3: build bridge-server ------------------------------------
-FROM golang:1.23-alpine AS sidecar
+# Track go.mod's `go 1.25.0` directive — older toolchains refuse to
+# download modules when the project targets a newer Go version.
+FROM golang:1.25-alpine AS sidecar
 RUN apk add --no-cache gcc musl-dev
 WORKDIR /src
 COPY go.mod go.sum ./
