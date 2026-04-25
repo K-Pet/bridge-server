@@ -1,6 +1,15 @@
-#!/command/with-contenv sh
-# Wait for Navidrome's health endpoint before starting
-until wget -q --spider http://127.0.0.1:4533/ping 2>/dev/null; do
+#!/bin/sh
+# Wait for Navidrome's WebUI before starting bridge-server. /app/ is
+# the WebUI root (returns 200 once Navidrome is fully ready) — the
+# Subsonic /rest/ping requires auth params, so /app/ is the simplest
+# unauthenticated readiness probe we can hit from a shell.
+#
+# We use a plain shell shebang rather than the s6 `with-contenv`
+# shim: in s6-overlay v3 services already inherit the container
+# environment by default, and the with-contenv wrapper has triggered
+# a `unable to exec ifelse` failure on some hosts despite ifelse
+# being installed. Plain /bin/sh avoids that entire codepath.
+until wget -q --spider http://127.0.0.1:4533/app/ 2>/dev/null; do
   sleep 0.5
 done
 exec /app/bridge-server
