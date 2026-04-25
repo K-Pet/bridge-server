@@ -7,6 +7,28 @@ import (
 	"time"
 )
 
+// Compile-time defaults set by `go build -ldflags="-X ..."`. We bake
+// them into the binary instead of into Docker `ENV` so they don't show
+// up as configurable knobs in Portainer / Docker dashboards — operators
+// running the image shouldn't see Supabase URLs or hCaptcha site keys
+// listed alongside their real config (it implies they need to fill
+// them in). The values themselves are not secrets:
+//
+//   - BridgeSupabaseURL: Supabase project URL (public — every client
+//     request goes here directly from the browser).
+//   - BridgeSupabaseAnonKey: publishable anon key. RLS-gated, designed
+//     to ship in client bundles.
+//   - BridgeHCaptchaSiteKey: hCaptcha *site* key (public identifier).
+//     The matching secret key lives on Supabase's auth servers.
+//
+// Runtime BRIDGE_* env vars still win over these for fork / dev
+// workflows.
+var (
+	BridgeSupabaseURL     = ""
+	BridgeSupabaseAnonKey = ""
+	BridgeHCaptchaSiteKey = ""
+)
+
 type Config struct {
 	Port         int
 	DataDir      string
@@ -70,6 +92,14 @@ type Config struct {
 	// DevMode is true. Defaults match the marketplace seed script.
 	DevEmail    string
 	DevPassword string
+
+	// HCaptchaSiteKey is the public hCaptcha site key. The Supabase
+	// project pairs it with a server-held secret key — we only need the
+	// site key on the client to render the widget. It's safe to ship in
+	// the /api/config payload (publishable by design). Empty when the
+	// project doesn't enforce captcha (e.g. local dev), in which case
+	// the frontend skips the captcha step.
+	HCaptchaSiteKey string
 }
 
 func Load() (*Config, error) {
@@ -84,8 +114,8 @@ func Load() (*Config, error) {
 		MasterSecret: envStr("BRIDGE_SECRET", ""),
 		DevMode:      envStr("BRIDGE_DEV", "") == "true",
 
-		SupabaseURL:        envStr("BRIDGE_SUPABASE_URL", ""),
-		SupabaseAnonKey:    envStr("BRIDGE_SUPABASE_ANON_KEY", ""),
+		SupabaseURL:        envStr("BRIDGE_SUPABASE_URL", BridgeSupabaseURL),
+		SupabaseAnonKey:    envStr("BRIDGE_SUPABASE_ANON_KEY", BridgeSupabaseAnonKey),
 		SupabaseServiceKey: envStr("BRIDGE_SUPABASE_SERVICE_KEY", ""),
 		SupabaseJWTSecret:  envStr("BRIDGE_SUPABASE_JWT_SECRET", ""),
 		WebhookSecret:      envStr("BRIDGE_WEBHOOK_SECRET", ""),
@@ -94,6 +124,7 @@ func Load() (*Config, error) {
 		Label:              envStr("BRIDGE_LABEL", ""),
 		DevEmail:           envStr("BRIDGE_DEV_EMAIL", "test@bridge.music"),
 		DevPassword:        envStr("BRIDGE_DEV_PASSWORD", "testpass123"),
+		HCaptchaSiteKey:    envStr("BRIDGE_HCAPTCHA_SITE_KEY", BridgeHCaptchaSiteKey),
 	}
 
 	// Auto-mint per-server identity if not handed in via env. Stays

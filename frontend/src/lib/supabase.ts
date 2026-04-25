@@ -5,6 +5,11 @@ export interface AppConfig {
   supabase_anon_key: string
   dev_mode: boolean
   marketplace_url: string
+  // Empty string when the project doesn't enforce captcha (e.g. local
+  // dev). The frontend treats empty as "captcha disabled" and skips
+  // the widget — matches the behavior of the local Supabase config
+  // where [auth.captcha] is commented out.
+  hcaptcha_site_key: string
   // Dev-only: test credentials for auto-sign-in (never present in prod).
   dev_email?: string
   dev_password?: string
@@ -20,7 +25,17 @@ export async function initConfig(): Promise<AppConfig> {
   _config = await res.json()
 
   if (_config!.supabase_url && _config!.supabase_anon_key) {
-    _supabase = createClient(_config!.supabase_url, _config!.supabase_anon_key)
+    _supabase = createClient(_config!.supabase_url, _config!.supabase_anon_key, {
+      auth: {
+        // Persist sessions in localStorage and auto-refresh before expiry.
+        // PKCE flow is the modern default for browser apps — protects
+        // recovery / magic-link redirects from token interception.
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        flowType: 'pkce',
+      },
+    })
   }
 
   return _config!

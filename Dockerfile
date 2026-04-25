@@ -19,7 +19,24 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend /web/dist ./web/dist
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" \
+
+# Bridge Music Supabase project + hCaptcha site key — baked into the
+# binary at link time (NOT exported to ENV) so end-users running this
+# image in Portainer / Docker don't see them listed as configurable
+# knobs alongside their real config. None of these three values is a
+# secret; they're public identifiers that already ship in the iOS app
+# bundle and the Marketplace web client. Operators forking the image
+# for a different Supabase project pass --build-arg at build time;
+# runtime `-e BRIDGE_SUPABASE_URL=…` still wins over the ldflag.
+ARG BRIDGE_SUPABASE_URL_DEFAULT=https://ryddlkjlpxtdrdvggipo.supabase.co
+ARG BRIDGE_SUPABASE_ANON_KEY_DEFAULT=sb_publishable_Wl562UROunrQI0XIqlb8cQ_efLR70Oe
+ARG BRIDGE_HCAPTCHA_SITE_KEY_DEFAULT=1dcef6cc-d22a-4f90-a882-c118b318f8f8
+
+RUN CGO_ENABLED=0 go build \
+    -ldflags="-s -w \
+        -X github.com/bridgemusic/bridge-server/internal/config.BridgeSupabaseURL=${BRIDGE_SUPABASE_URL_DEFAULT} \
+        -X github.com/bridgemusic/bridge-server/internal/config.BridgeSupabaseAnonKey=${BRIDGE_SUPABASE_ANON_KEY_DEFAULT} \
+        -X github.com/bridgemusic/bridge-server/internal/config.BridgeHCaptchaSiteKey=${BRIDGE_HCAPTCHA_SITE_KEY_DEFAULT}" \
     -o /out/bridge-server ./cmd/bridge-server
 
 # --- Stage 4: runtime ------------------------------------------------
@@ -58,16 +75,10 @@ ENV BRIDGE_PORT=8888 \
     BRIDGE_MUSIC_DIR=/data/music \
     BRIDGE_ND_URL=http://127.0.0.1:4533
 
-# Bridge Music Supabase project — baked-in defaults so end-users don't
-# need to know or configure these. Both values are publishable by
-# design (the URL is the project identity; the publishable anon key is
-# RLS-gated and safe in client builds). Operators forking the image
-# for a different Supabase project pass --build-arg at build time;
-# runtime `-e BRIDGE_SUPABASE_URL=…` still wins over these defaults.
-ARG BRIDGE_SUPABASE_URL_DEFAULT=https://ryddlkjlpxtdrdvggipo.supabase.co
-ARG BRIDGE_SUPABASE_ANON_KEY_DEFAULT=sb_publishable_Wl562UROunrQI0XIqlb8cQ_efLR70Oe
-ENV BRIDGE_SUPABASE_URL=${BRIDGE_SUPABASE_URL_DEFAULT} \
-    BRIDGE_SUPABASE_ANON_KEY=${BRIDGE_SUPABASE_ANON_KEY_DEFAULT}
+# NOTE: Supabase URL / anon key / hCaptcha site key are linked into the
+# bridge-server binary in stage 3, NOT set as ENV here. That keeps them
+# out of `docker inspect` and Portainer's environment view, where they
+# would otherwise look like user-configurable secrets.
 
 VOLUME ["/data/music", "/data/navidrome", "/data/bridge"]
 EXPOSE 8888

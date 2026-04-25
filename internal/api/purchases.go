@@ -690,6 +690,7 @@ func handleConfig(cfg *config.Config) http.HandlerFunc {
 			"supabase_anon_key": cfg.SupabaseAnonKey,
 			"dev_mode":          cfg.DevMode,
 			"marketplace_url":   cfg.MarketplaceURL,
+			"hcaptcha_site_key": cfg.HCaptchaSiteKey,
 		}
 		if cfg.DevMode && cfg.DevEmail != "" {
 			payload["dev_email"] = cfg.DevEmail
