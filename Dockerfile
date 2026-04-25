@@ -31,12 +31,19 @@ COPY --from=frontend /web/dist ./web/dist
 ARG BRIDGE_SUPABASE_URL_DEFAULT=https://ryddlkjlpxtdrdvggipo.supabase.co
 ARG BRIDGE_SUPABASE_ANON_KEY_DEFAULT=sb_publishable_Wl562UROunrQI0XIqlb8cQ_efLR70Oe
 ARG BRIDGE_HCAPTCHA_SITE_KEY_DEFAULT=1dcef6cc-d22a-4f90-a882-c118b318f8f8
+# Marketplace iframe target. Cross-origin absolute URL — the
+# marketplace lives in its own Portainer stack behind its own NPM
+# Proxy Host. Override at build time to point at a different
+# marketplace deployment (e.g. https://bridgemusic.app once that's
+# the canonical site).
+ARG BRIDGE_MARKETPLACE_URL_DEFAULT=https://market.bykobejean.com
 
 RUN CGO_ENABLED=0 go build \
     -ldflags="-s -w \
         -X github.com/bridgemusic/bridge-server/internal/config.BridgeSupabaseURL=${BRIDGE_SUPABASE_URL_DEFAULT} \
         -X github.com/bridgemusic/bridge-server/internal/config.BridgeSupabaseAnonKey=${BRIDGE_SUPABASE_ANON_KEY_DEFAULT} \
-        -X github.com/bridgemusic/bridge-server/internal/config.BridgeHCaptchaSiteKey=${BRIDGE_HCAPTCHA_SITE_KEY_DEFAULT}" \
+        -X github.com/bridgemusic/bridge-server/internal/config.BridgeHCaptchaSiteKey=${BRIDGE_HCAPTCHA_SITE_KEY_DEFAULT} \
+        -X github.com/bridgemusic/bridge-server/internal/config.BridgeMarketplaceURL=${BRIDGE_MARKETPLACE_URL_DEFAULT}" \
     -o /out/bridge-server ./cmd/bridge-server
 
 # --- Stage 4: runtime ------------------------------------------------

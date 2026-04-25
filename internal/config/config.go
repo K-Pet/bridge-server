@@ -27,6 +27,13 @@ var (
 	BridgeSupabaseURL     = ""
 	BridgeSupabaseAnonKey = ""
 	BridgeHCaptchaSiteKey = ""
+	// BridgeMarketplaceURL: where the embedded SPA's storefront iframe
+	// loads from. Cross-origin absolute URL — the marketplace runs as
+	// its own standalone site (its own NPM Proxy Host, its own LE cert,
+	// its own Portainer stack). The marketplace's
+	// EXPO_PUBLIC_EMBED_ORIGINS allowlist must include this bridge-
+	// server's public origin for the postMessage session handoff.
+	BridgeMarketplaceURL = "https://market.bykobejean.com"
 )
 
 type Config struct {
@@ -119,7 +126,7 @@ func Load() (*Config, error) {
 		SupabaseServiceKey: envStr("BRIDGE_SUPABASE_SERVICE_KEY", ""),
 		SupabaseJWTSecret:  envStr("BRIDGE_SUPABASE_JWT_SECRET", ""),
 		WebhookSecret:      envStr("BRIDGE_WEBHOOK_SECRET", ""),
-		MarketplaceURL:     envStr("BRIDGE_MARKETPLACE_URL", "/marketplace/"),
+		MarketplaceURL:     envStr("BRIDGE_MARKETPLACE_URL", BridgeMarketplaceURL),
 		ExternalURL:        envStr("BRIDGE_EXTERNAL_URL", ""),
 		Label:              envStr("BRIDGE_LABEL", ""),
 		DevEmail:           envStr("BRIDGE_DEV_EMAIL", "test@bridge.music"),

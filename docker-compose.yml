@@ -11,8 +11,14 @@ services:
     #   dockerfile: Dockerfile
     container_name: bridge-server
     restart: unless-stopped
-    ports:
-      - "8888:8888"
+    # Internal-only — nginx-proxy-manager (running in another stack on the
+    # `npm_network` below) terminates TLS and routes /* here. Don't publish
+    # 8888 to the host; that would expose the bare HTTP API to the LAN
+    # alongside NPM's HTTPS.
+    expose:
+      - "8888"
+    networks:
+      - npm
     volumes:
       # Music library: bind-mounted so you can drop files in from the
       # host (e.g. rsync, manual imports). Override MUSIC_DIR in .env to
@@ -60,6 +66,12 @@ services:
       retries: 3
       start_period: 60s
 
+# The marketplace runs in its own Portainer stack at its own public
+# domain (e.g. market.bykobejean.com) — see the docker-compose.yml in
+# the Bridge-Music-Marketplace repo. Cross-origin handshake; the
+# marketplace's EXPO_PUBLIC_EMBED_ORIGINS allowlist gates session
+# forwarding from this bridge-server's frontend.
+
 # Named volumes — see notes on the bridge-music service above.
 # To migrate existing data from the old `./data/{navidrome,bridge}` bind
 # mounts, run `docker run --rm -v "$PWD/data/navidrome:/src" -v
@@ -68,3 +80,12 @@ services:
 volumes:
   bridge-navidrome:
   bridge-data:
+
+# Bridge-server joins the network NPM was deployed on so it can resolve
+# `bridge-server` by container name in its Forward Hostname field.
+# Update the network name below to match your NPM stack — find it with
+# `docker network ls` (typically `<npm-stack-name>_default`).
+networks:
+  npm:
+    name: npm_default
+    external: true
