@@ -1,15 +1,29 @@
 #!/bin/sh
-# Wait for Navidrome's WebUI before starting bridge-server. /app/ is
-# the WebUI root (returns 200 once Navidrome is fully ready) — the
-# Subsonic /rest/ping requires auth params, so /app/ is the simplest
-# unauthenticated readiness probe we can hit from a shell.
-#
-# We use a plain shell shebang rather than the s6 `with-contenv`
-# shim: in s6-overlay v3 services already inherit the container
-# environment by default, and the with-contenv wrapper has triggered
-# a `unable to exec ifelse` failure on some hosts despite ifelse
-# being installed. Plain /bin/sh avoids that entire codepath.
-until wget -q --spider http://127.0.0.1:4533/app/ 2>/dev/null; do
+# Pull container env into the service. s6-overlay v3 stages each
+# Dockerfile ENV var as a single file under /run/s6/container_environment;
+# the canonical helper is `with-contenv`, but its execline path is
+# broken on this image build (`execlineb: unable to exec ifelse: No
+# such file or directory` despite ifelse being present at the
+# documented location). Loading the envdir manually with portable
+# shell sidesteps the entire execline call chain.
+if [ -d /run/s6/container_environment ]; then
+  for f in /run/s6/container_environment/*; do
+    [ -f "$f" ] || continue
+    name=$(basename "$f")
+    # Skip filenames that aren't valid identifiers — keeps a stray
+    # editor backup or "X=Y" filename from corrupting our env.
+    case "$name" in
+      *[!A-Za-z0-9_]*) continue ;;
+    esac
+    export "$name=$(cat "$f")"
+  done
+fi
+
+# Wait for Navidrome's WebUI before starting bridge-server. Use a GET
+# (-O /dev/null) rather than --spider's HEAD — Navidrome's /ping
+# does not implement HEAD, which is why the original spider-based
+# wait loop on /ping never exited.
+until wget -q -O /dev/null http://127.0.0.1:4533/app/ 2>/dev/null; do
   sleep 0.5
 done
 exec /app/bridge-server
