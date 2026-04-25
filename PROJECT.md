@@ -11,7 +11,7 @@ Built on [Navidrome](https://github.com/navidrome/navidrome) as an embedded engi
 │  Docker Container (bridge-server:latest)                    │
 │                                                             │
 │  ┌────────────────────────────────────────────────────────┐ │
-│  │  bridge-server (:8080, exposed)                        │ │
+│  │  bridge-server (:8888, exposed)                        │ │
 │  │                                                        │ │
 │  │  /              → embedded frontend (SPA)              │ │
 │  │  /api/*         → Bridge API (purchases, auth, config) │ │
@@ -173,7 +173,7 @@ When the container starts with empty `/data/bridge`:
          { "username": "bridge-admin", "password": "<generated>" }
       c. Store credentials in /data/bridge/nd-credentials (mode 0600)
 5. Bridge Server authenticates to Navidrome, caches JWT
-6. Bridge Server starts serving on :8080
+6. Bridge Server starts serving on :8888
 ```
 
 **Important:** `/data/bridge` is critical state. If users lose this volume, they lose the Navidrome admin credentials and must reset. Document this clearly.
@@ -230,7 +230,7 @@ All Bridge Server config uses the `BRIDGE_` env var prefix:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BRIDGE_PORT` | `8080` | Port the server listens on |
+| `BRIDGE_PORT` | `8888` | Port the server listens on |
 | `BRIDGE_DATA` | `/data/bridge` | Sidecar state directory |
 | `BRIDGE_MUSIC_DIR` | `/data/music` | Music library (shared with ND) |
 | `BRIDGE_SUPABASE_URL` | (required) | Supabase project URL |
@@ -252,7 +252,7 @@ Navidrome config uses `ND_` prefix — set in the Dockerfile, users shouldn't ne
 ```bash
 docker run -d \
   --name bridge-music \
-  -p 8080:8080 \
+  -p 8888:8888 \
   -v ./music:/data/music \
   -v ./navidrome:/data/navidrome \
   -v ./bridge:/data/bridge \
@@ -270,7 +270,7 @@ services:
   bridge-music:
     image: bridgemusic/bridge-server:latest
     ports:
-      - "8080:8080"
+      - "8888:8888"
     volumes:
       - ./music:/data/music
       - ./navidrome:/data/navidrome

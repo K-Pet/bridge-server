@@ -38,7 +38,7 @@ If anything in this runbook gets out of date, fix it here — this file
 ┌──────────────────────────────────────────────────────────────────┐
 │   Bridge Music Server (this repo)                                │
 │   ─────────────────────────                                      │
-│   :8080  bridge-server (frontend SPA + API + SSE + proxy)        │
+│   :8888  bridge-server (frontend SPA + API + SSE + proxy)        │
 │   :4533  navidrome (localhost only)                              │
 │                                                                  │
 │   Volumes:                                                       │
@@ -71,7 +71,7 @@ Reading order before you start:
 | Docker (or Podman) ≥ 24 with Compose v2 | Single-container deploy | docker.com / `brew install docker` |
 | A Linux/macOS host with ≥ 2 GB RAM, ≥ 50 GB disk | Music files live on disk | DigitalOcean, Hetzner, an old laptop, an existing NAS |
 | A Supabase project the marketplace is already pointed at | Source of truth for users + purchases | Marketplace repo's `supabase/` is the schema |
-| A way to expose port 8080 on a public HTTPS URL | Marketplace webhooks must reach the server | Real domain + reverse proxy, **or** a Cloudflare Tunnel for testing |
+| A way to expose port 8888 on a public HTTPS URL | Marketplace webhooks must reach the server | Real domain + reverse proxy, **or** a Cloudflare Tunnel for testing |
 
 **Decision: webhook vs poll mode.** If you can't expose the server
 publicly (locked-down ISP, no domain), set
@@ -133,7 +133,7 @@ network. Pick **one** of the following.
 
    ```caddyfile
    music.example.com {
-     reverse_proxy 127.0.0.1:8080
+     reverse_proxy 127.0.0.1:8888
    }
    ```
 
@@ -153,7 +153,7 @@ cloudflared tunnel login
 cloudflared tunnel create bridge
 
 # Each session
-cloudflared tunnel run --url http://localhost:8080 bridge
+cloudflared tunnel run --url http://localhost:8888 bridge
 ```
 
 Cloudflare prints a `https://*.trycloudflare.com` URL. Paste it into
@@ -176,13 +176,13 @@ docker compose logs -f bridge-music
 Wait for the log line:
 
 ```
-bridge server starting port=8080
+bridge server starting port=8888
 ```
 
 Sanity check from the deploy host:
 
 ```bash
-curl -s http://localhost:8080/api/health
+curl -s http://localhost:8888/api/health
 # → {"status":"ok"}
 
 curl -s "$BRIDGE_EXTERNAL_URL/api/health"
@@ -286,7 +286,7 @@ if you've already signed in).
 ## 8. Hardening checklist (before sharing the URL)
 
 - [ ] TLS in front of the container (step 4a or Tunnel — never expose
-      port 8080 over plain HTTP).
+      port 8888 over plain HTTP).
 - [ ] `.env` has 0600 permissions and is not in version control.
 - [ ] Volumes (`./data/music`, `./data/navidrome`, `./data/bridge`) are
       backed up — `/data/bridge` in particular contains the Navidrome

@@ -53,7 +53,7 @@ ENV ND_MUSICFOLDER=/data/music \
     ND_PORT=4533
 
 # Bridge server config — operational defaults (paths, ports).
-ENV BRIDGE_PORT=8080 \
+ENV BRIDGE_PORT=8888 \
     BRIDGE_DATA=/data/bridge \
     BRIDGE_MUSIC_DIR=/data/music \
     BRIDGE_ND_URL=http://127.0.0.1:4533
@@ -70,6 +70,6 @@ ENV BRIDGE_SUPABASE_URL=${BRIDGE_SUPABASE_URL_DEFAULT} \
     BRIDGE_SUPABASE_ANON_KEY=${BRIDGE_SUPABASE_ANON_KEY_DEFAULT}
 
 VOLUME ["/data/music", "/data/navidrome", "/data/bridge"]
-EXPOSE 8080
+EXPOSE 8888
 
 ENTRYPOINT ["/init"]

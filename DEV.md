@@ -62,7 +62,7 @@ This launches four services:
 | **Supabase** | `http://localhost:54321` | Auth, DB, Storage — managed by the **marketplace** Tiltfile |
 | **Supabase Studio** | `http://localhost:54323` | Database admin UI |
 | **Navidrome** | `http://localhost:4533` | Music engine (Docker) |
-| **Bridge Server** | `http://localhost:8080` | Go API backend |
+| **Bridge Server** | `http://localhost:8888` | Go API backend |
 | **Frontend** | `http://localhost:5173` | React dev server with HMR (legacy internal UI) |
 
 Open **http://localhost:5173** in your browser for the frontend.
@@ -80,7 +80,7 @@ Browser (:5173)
     │
     └── /api/*, /rest/*, /nd/*, /ws
             │
-            └── proxy ──→ Bridge Server (:8080)
+            └── proxy ──→ Bridge Server (:8888)
                               │
                               └── /rest/*, /nd/*
                                       │
@@ -114,7 +114,7 @@ docker compose -f docker-compose.dev.yml up
 # Terminal 2: Go backend
 mkdir -p data/bridge data/music
 BRIDGE_DEV=true \
-BRIDGE_PORT=8080 \
+BRIDGE_PORT=8888 \
 BRIDGE_DATA=./data/bridge \
 BRIDGE_MUSIC_DIR=./data/music \
 BRIDGE_ND_URL=http://localhost:4533 \
@@ -198,8 +198,8 @@ cd frontend && npm run build && cd .. && go build ./...
 cd frontend && npx tsc -b --noEmit
 
 # Test the health endpoint
-curl http://localhost:8080/api/health
+curl http://localhost:8888/api/health
 
 # Test settings endpoint (dev mode, no auth needed)
-curl http://localhost:8080/api/settings
+curl http://localhost:8888/api/settings
 ```

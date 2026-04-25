@@ -12,7 +12,7 @@ services:
     container_name: bridge-server
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8888:8888"
     volumes:
       # Point this at wherever your music will live. Everything else is
       # bridge-server state — leave the defaults.
@@ -46,7 +46,7 @@ services:
     # bridge-server's own port opens, so a port-only liveness probe
     # would lie during boot).
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8888/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3

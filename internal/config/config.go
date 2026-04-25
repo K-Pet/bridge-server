@@ -74,7 +74,7 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Port:         envInt("BRIDGE_PORT", 8080),
+		Port:         envInt("BRIDGE_PORT", 8888),
 		DataDir:      envStr("BRIDGE_DATA", "/data/bridge"),
 		MusicDir:     envStr("BRIDGE_MUSIC_DIR", "/data/music"),
 		NavidromeURL: envStr("BRIDGE_ND_URL", "http://127.0.0.1:4533"),
