@@ -1,6 +1,16 @@
 services:
   bridge-music:
-    build: .
+    # Pull pre-built image from GHCR (published by .github/workflows/docker.yml
+    # on every push to main). Use this for Portainer stacks and any deploy
+    # path where the source isn't checked out alongside the compose file.
+    image: ghcr.io/k-pet/bridge-server:latest
+    # For local-source workflows (developing inside this repo), comment out
+    # the `image:` line above and uncomment the build block below.
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    container_name: bridge-server
+    restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
@@ -31,4 +41,13 @@ services:
       # BRIDGE_SUPABASE_URL / BRIDGE_SUPABASE_ANON_KEY are baked into
       # the image; override at build time with --build-arg if you fork
       # the project.
-    restart: unless-stopped
+    # Lets Portainer / docker swarm tell at a glance whether the
+    # container is actually healthy (the s6 init succeeds before
+    # bridge-server's own port opens, so a port-only liveness probe
+    # would lie during boot).
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
