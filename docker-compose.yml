@@ -14,11 +14,19 @@ services:
     ports:
       - "8888:8888"
     volumes:
-      # Point this at wherever your music will live. Everything else is
-      # bridge-server state — leave the defaults.
+      # Music library: bind-mounted so you can drop files in from the
+      # host (e.g. rsync, manual imports). Override MUSIC_DIR in .env to
+      # point at the disk where your library lives.
       - ${MUSIC_DIR:-./data/music}:/data/music
-      - ./data/navidrome:/data/navidrome
-      - ./data/bridge:/data/bridge
+      # Internal state: named Docker volumes. These survive stack
+      # recreation under Portainer / `docker compose down -v ...up` —
+      # relative bind mounts (the previous default) re-resolve against
+      # whatever directory the stack happens to be deployed from, which
+      # silently dropped Navidrome's DB and the bridge-server admin
+      # credentials on every Portainer "Update stack". Named volumes
+      # live under /var/lib/docker/volumes/ and are pinned by name.
+      - bridge-navidrome:/data/navidrome
+      - bridge-data:/data/bridge
     environment:
       # ── User-facing config ──────────────────────────────────────────
       # Friendly name shown in the marketplace ("Living Room", etc.).
@@ -51,3 +59,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+# Named volumes — see notes on the bridge-music service above.
+# To migrate existing data from the old `./data/{navidrome,bridge}` bind
+# mounts, run `docker run --rm -v "$PWD/data/navidrome:/src" -v
+# bridge-navidrome:/dst alpine cp -a /src/. /dst/` (and the same for
+# bridge-data) before bringing the new stack up.
+volumes:
+  bridge-navidrome:
+  bridge-data:

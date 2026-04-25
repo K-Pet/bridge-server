@@ -167,7 +167,7 @@ func (c *Client) AutoPair(ctx context.Context, userJWT string) (*HomeServer, err
 		return nil, err
 	}
 
-	out, err := c.callUserEF(ctx, "register-home-server", userJWT, body)
+	out, err := c.callUserEF(ctx, http.MethodPost, "register-home-server", userJWT, body)
 	if err != nil {
 		return nil, err
 	}
@@ -191,11 +191,16 @@ func (c *Client) AutoPair(ctx context.Context, userJWT string) (*HomeServer, err
 // they're unpaired. Calls the marketplace's get-home-server EF with
 // the user's JWT — RLS on user_home_servers denies all client roles,
 // so this is the only sanctioned read path.
+//
+// Uses GET because get-home-server only accepts GET/DELETE — calling it
+// with POST returns 405, which used to manifest as a permanent
+// `server_paired=false` and an infinite onboarding loop right after
+// auto-pair succeeded.
 func (c *Client) GetPairStatus(ctx context.Context, userJWT string) (*HomeServer, error) {
 	if c.cfg.SupabaseURL == "" {
 		return nil, errors.New("supabase not configured")
 	}
-	out, err := c.callUserEF(ctx, "get-home-server", userJWT, nil)
+	out, err := c.callUserEF(ctx, http.MethodGet, "get-home-server", userJWT, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -263,11 +268,14 @@ func (c *Client) CanAutoPair() bool {
 // Helpers
 // =============================================================================
 
-// callUserEF POSTs to a marketplace Edge Function with the user's JWT
-// for authorization and the project anon key as `apikey` so kong can
-// route the request. The body is forwarded as-is; nil sends an empty
-// JSON object.
-func (c *Client) callUserEF(ctx context.Context, function, userJWT string, body []byte) ([]byte, error) {
+// callUserEF calls a marketplace Edge Function with the user's JWT for
+// authorization and the project anon key as `apikey` so kong can route
+// the request. Method is explicit: each EF declares the verbs it
+// accepts (e.g. get-home-server is GET/DELETE only — sending POST
+// there returns 405 and used to break onboarding's pair-status check).
+// For methods with bodies (POST/PUT/PATCH) `body` is forwarded as-is;
+// for GET/DELETE it must be nil and we omit the request body entirely.
+func (c *Client) callUserEF(ctx context.Context, method, function, userJWT string, body []byte) ([]byte, error) {
 	if userJWT == "" {
 		return nil, errors.New("user JWT required for " + function)
 	}
@@ -276,15 +284,15 @@ func (c *Client) callUserEF(ctx context.Context, function, userJWT string, body 
 	var reader io.Reader
 	if body != nil {
 		reader = bytesReader(body)
-	} else {
-		reader = bytesReader([]byte(`{}`))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, reader)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("apikey", c.cfg.SupabaseAnonKey)
 	req.Header.Set("Authorization", "Bearer "+userJWT)
 

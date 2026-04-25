@@ -28,13 +28,25 @@ const (
 )
 
 // Bootstrap ensures we have working Navidrome admin credentials.
-// On first run, it creates the admin user. On subsequent runs, it loads stored credentials.
+// On first run, it creates the admin user. On subsequent runs, it loads
+// stored credentials.
+//
+// Self-healing: if stored credentials fail to authenticate (most often
+// because Navidrome's data volume was wiped on stack recreation while
+// /data/bridge persisted — common with relative bind mounts under
+// Portainer), we attempt to re-create the admin user. If Navidrome has
+// no users, createAdmin succeeds and we overwrite the stored creds; if
+// it returns 403, real users exist with a different password and we
+// surface a clear recovery error. Without this, an operator would have
+// to manually delete /data/bridge/nd-credentials after every reset.
 func Bootstrap(ctx context.Context, cfg *config.Config) (*Client, error) {
 	credPath := filepath.Join(cfg.DataDir, credentialsFile)
 
-	creds, err := loadCredentials(credPath)
-	if err != nil {
+	creds, loadErr := loadCredentials(credPath)
+	freshlyMinted := false
+	if loadErr != nil {
 		slog.Info("no existing credentials, creating admin user")
+		var err error
 		creds, err = createAdmin(ctx, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create admin: %w", err)
@@ -42,15 +54,49 @@ func Bootstrap(ctx context.Context, cfg *config.Config) (*Client, error) {
 		if err := saveCredentials(credPath, creds); err != nil {
 			return nil, fmt.Errorf("failed to save credentials: %w", err)
 		}
+		freshlyMinted = true
 	}
 
+	client, authErr := authenticatedClient(ctx, cfg, creds)
+	if authErr == nil {
+		slog.Info("authenticated with navidrome", "user", creds.Username)
+		return client, nil
+	}
+
+	if freshlyMinted {
+		// We just created the admin — if auth still fails it's not a
+		// reset/mismatch case, it's a real problem. Don't retry.
+		return nil, fmt.Errorf("failed to authenticate with freshly-created admin: %w", authErr)
+	}
+
+	slog.Warn("stored navidrome credentials failed to authenticate, attempting re-create",
+		"error", authErr, "user", creds.Username)
+
+	newCreds, recoverErr := createAdmin(ctx, cfg)
+	if recoverErr != nil {
+		return nil, fmt.Errorf(
+			"navidrome auth failed and admin re-creation failed (auth_err=%v): %w",
+			authErr, recoverErr,
+		)
+	}
+	if err := saveCredentials(credPath, newCreds); err != nil {
+		return nil, fmt.Errorf("failed to save recovered credentials: %w", err)
+	}
+
+	client, authErr = authenticatedClient(ctx, cfg, newCreds)
+	if authErr != nil {
+		return nil, fmt.Errorf("failed to authenticate after recovery: %w", authErr)
+	}
+	slog.Info("recovered navidrome admin credentials after data reset", "user", newCreds.Username)
+	return client, nil
+}
+
+func authenticatedClient(ctx context.Context, cfg *config.Config, creds *credentials) (*Client, error) {
 	client := NewClient(cfg.NavidromeURL, creds.Username, creds.Password)
 	client.musicDir = cfg.MusicDir
 	if err := client.Authenticate(ctx); err != nil {
-		return nil, fmt.Errorf("failed to authenticate with stored credentials: %w", err)
+		return nil, err
 	}
-
-	slog.Info("authenticated with navidrome", "user", creds.Username)
 	return client, nil
 }
 

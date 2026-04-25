@@ -288,9 +288,14 @@ if you've already signed in).
 - [ ] TLS in front of the container (step 4a or Tunnel — never expose
       port 8888 over plain HTTP).
 - [ ] `.env` has 0600 permissions and is not in version control.
-- [ ] Volumes (`./data/music`, `./data/navidrome`, `./data/bridge`) are
-      backed up — `/data/bridge` in particular contains the Navidrome
-      admin credentials (recoverable but disruptive to lose).
+- [ ] Volumes are backed up: the music bind mount (`$MUSIC_DIR` /
+      `./data/music`) plus the named Docker volumes `bridge-navidrome`
+      and `bridge-data`. `bridge-data` in particular holds the
+      Navidrome admin credentials and the auto-minted server
+      identity — recoverable, but disruptive to lose. Use
+      `docker run --rm -v bridge-data:/src -v "$PWD/backups:/dst"
+      alpine tar -C /src -czf /dst/bridge-data.tgz .` (and the same
+      for `bridge-navidrome`) for an offline snapshot.
 - [ ] Container restart policy is `unless-stopped` (already in
       `docker-compose.yml`).
 - [ ] Supabase project's allowed redirect URLs include
