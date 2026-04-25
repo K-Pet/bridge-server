@@ -32,8 +32,9 @@ If anything in this runbook gets out of date, fix it here — this file
 │       - get-home-server    — read/delete the user's pairing        │
 │                                                                    │
 └──┬─────────────────────────────┬───────────────────────────────────┘
-   │  webhook (HMAC-signed)      │  service-role REST (auto-pair)
-   ▼                             ▼
+   │  webhook (HMAC-signed)      │  Edge Functions
+   ▼                             ▼  (HMAC for server-context,
+                                  │   user-JWT for onboarding)
 ┌──────────────────────────────────────────────────────────────────┐
 │   Bridge Music Server (this repo)                                │
 │   ─────────────────────────                                      │
@@ -89,16 +90,15 @@ cp .env.example .env
 $EDITOR .env
 ```
 
-You only need to set **four lines**:
+You only need to set **three lines**:
 
 | Var | What it is |
 |-----|------------|
 | `MUSIC_DIR` | Where your music lives on disk. Defaults to `./data/music` inside the repo if blank. |
 | `BRIDGE_LABEL` | Friendly name shown in the marketplace UI ("Living Room", etc.). |
 | `BRIDGE_EXTERNAL_URL` | The HTTPS URL you'll expose in step 3. |
-| `BRIDGE_SUPABASE_SERVICE_KEY` | Operator-supplied (transitional — see callout below). |
 
-Auto-managed (don't set unless you know why):
+That's it. Everything else auto-manages:
 
 - **`BRIDGE_SERVER_ID`** and **`BRIDGE_WEBHOOK_SECRET`** mint themselves
   on first boot and persist to `/data/bridge/credentials.json` (mode
@@ -108,17 +108,15 @@ Auto-managed (don't set unless you know why):
   into the public image. Operators forking for a different Supabase
   project pass `--build-arg` at `docker build` time.
 - **JWT verification** uses `${SUPABASE_URL}/auth/v1/user` — no shared
-  HMAC secret. `BRIDGE_SUPABASE_JWT_SECRET` is no longer required.
+  HMAC secret needed.
+- **Privileged operations** (auto-pair, delivery status, storage URL
+  signing, poll-mode purchase fetch) go through Supabase Edge
+  Functions authenticated by either the auto-minted webhook_secret
+  (server-context calls) or the user's forwarded JWT. End-user
+  installs no longer carry the Supabase project's service-role key.
 
-> **Phase 2b will eliminate `SERVICE_KEY` too.** It's currently still
-> required because bridge-server makes service-role writes (auto-pair,
-> mark-delivered, signed storage URLs) via PostgREST. Phase 2b moves
-> these behind Edge Functions authenticated by the auto-minted
-> webhook_secret, after which the user-facing `.env` is just three
-> lines.
-
-> **Never commit `.env`.** `BRIDGE_SUPABASE_SERVICE_KEY` grants
-> god-mode access to the Bridge Music Supabase project.
+> **Never commit `.env`.** `MUSIC_DIR` is benign but `.env` files are
+> a habit you don't want to break.
 
 ---
 

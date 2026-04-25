@@ -13,10 +13,17 @@ type Config struct {
 	MusicDir     string
 	NavidromeURL string
 
-	SupabaseURL        string
-	SupabaseAnonKey    string
+	SupabaseURL     string
+	SupabaseAnonKey string
+	// Deprecated: bridge-server stopped using service-role in Phase 2b
+	// (privileged ops moved to Supabase Edge Functions authenticated by
+	// the auto-minted webhook_secret or the user's forwarded JWT).
+	// Field stays for one release so out-of-tree forks have a cycle to
+	// migrate; nothing in this repo reads it as of the cutover.
 	SupabaseServiceKey string
-	SupabaseJWTSecret  string
+	// Deprecated: replaced in Phase 2a by AuthVerifier round-tripping
+	// through ${SUPABASE_URL}/auth/v1/user. Same migration window.
+	SupabaseJWTSecret string
 
 	// WebhookSecret authenticates marketplace → bridge-server webhook
 	// deliveries. Auto-minted at first boot in production (persisted to
