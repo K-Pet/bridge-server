@@ -1,16 +1,22 @@
-# Production Setup — Bridge Music Server
+# Deployment — bridge-server
 
-End-to-end runbook for spinning up a Bridge Music Server instance for
-ecosystem testing (or a real production install). When you finish this
+End-to-end runbook for spinning up a bridge-server instance for
+ecosystem testing or a real production install. When you finish this
 runbook you'll have:
 
-- A Bridge Music Server reachable at a public URL.
+- A bridge-server reachable at a public HTTPS URL
 - A user signed in to that server's frontend whose Supabase account is
-  paired with the server (no manual code entry).
+  paired with this server (no manual pair-code entry)
 - A working delivery pipeline: buy in the marketplace → file lands in
-  `/data/music` → Navidrome scans → playable from frontend & iOS app.
-- The iOS app auto-connecting to the paired server the first time the
-  user signs in to Supabase on a fresh device.
+  `/data/music` → Navidrome scans → playable from frontend + iOS app
+- The iOS app auto-connecting to the paired server on the first
+  Supabase sign-in on a fresh device
+
+For local dev see [`DEVELOPMENT.md`](./DEVELOPMENT.md). For the
+ecosystem walkthrough see
+[`../../Bridge-Music-Marketplace/docs/ARCHITECTURE.md`](../../Bridge-Music-Marketplace/docs/ARCHITECTURE.md).
+For the wire format see
+[`../../Bridge-Music-Marketplace/docs/reference/PURCHASE_CONTRACT.md`](../../Bridge-Music-Marketplace/docs/reference/PURCHASE_CONTRACT.md).
 
 If anything in this runbook gets out of date, fix it here — this file
 *is* the supported install path.
@@ -58,9 +64,11 @@ If anything in this runbook gets out of date, fix it here — this file
 
 Reading order before you start:
 
-1. [`PROJECT.md`](../PROJECT.md) — full architecture
-2. [`docs/PURCHASE_CONTRACT.md`](PURCHASE_CONTRACT.md) — table shapes
-   and security model. Do not duplicate any of it here.
+1. [`ARCHITECTURE.md`](./ARCHITECTURE.md) — server-side internals
+2. [`../../Bridge-Music-Marketplace/docs/ARCHITECTURE.md`](../../Bridge-Music-Marketplace/docs/ARCHITECTURE.md)
+   — ecosystem walkthrough
+3. [`../../Bridge-Music-Marketplace/docs/reference/PURCHASE_CONTRACT.md`](../../Bridge-Music-Marketplace/docs/reference/PURCHASE_CONTRACT.md)
+   — wire format and security model. Do not duplicate any of it here.
 
 ---
 
@@ -330,8 +338,9 @@ first's row — the first user's purchases will start trying to deliver
 to the first user's last-paired URL.
 
 For shared households today: have everyone sign in with the same
-Supabase account. Multi-user is on the roadmap (`PROJECT.md` →
-"Future Considerations").
+Supabase account. Multi-user (one bridge-server, multiple Bridge
+accounts mapped to per-user Navidrome users) is on the future
+roadmap.
 
 ---
 
