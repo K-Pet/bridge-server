@@ -1,2 +1,21 @@
-#!/command/execlineb -P
-/app/navidrome
+#!/bin/sh
+# Pull container env into the service. s6-overlay v3 stages each
+# Dockerfile ENV var as a single file under /run/s6/container_environment;
+# the canonical helper is `with-contenv`, but its execline path is broken
+# on this image build (see bridge-server/run for the same workaround).
+# Without this loop, Navidrome starts with no ND_* vars and silently
+# defaults MusicFolder to a relative path that resolves against the s6
+# service dir, then persists that bogus path into navidrome.db where it
+# survives restarts.
+if [ -d /run/s6/container_environment ]; then
+  for f in /run/s6/container_environment/*; do
+    [ -f "$f" ] || continue
+    name=$(basename "$f")
+    case "$name" in
+      *[!A-Za-z0-9_]*) continue ;;
+    esac
+    export "$name=$(cat "$f")"
+  done
+fi
+
+exec /app/navidrome
