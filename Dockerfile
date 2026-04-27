@@ -50,13 +50,21 @@ RUN CGO_ENABLED=0 go build \
 FROM alpine:3.20
 
 ARG S6_OVERLAY_VERSION=3.2.0.2
-
-# Install s6-overlay
-ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp
-ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-x86_64.tar.xz /tmp
-RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz \
- && tar -C / -Jxpf /tmp/s6-overlay-x86_64.tar.xz \
- && rm /tmp/s6-overlay-*.tar.xz
+# TARGETARCH is provided automatically by `docker buildx build`. We
+# translate Docker's arch names into the names s6-overlay publishes
+# its tarballs under so the same Dockerfile builds for amd64 + arm64.
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+      amd64) S6_ARCH=x86_64 ;; \
+      arm64) S6_ARCH=aarch64 ;; \
+      arm)   S6_ARCH=armhf ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+ && wget -qO /tmp/s6-noarch.tar.xz "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz" \
+ && wget -qO /tmp/s6-arch.tar.xz   "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" \
+ && tar -C / -Jxpf /tmp/s6-noarch.tar.xz \
+ && tar -C / -Jxpf /tmp/s6-arch.tar.xz \
+ && rm /tmp/s6-*.tar.xz
 
 RUN apk add --no-cache ca-certificates ffmpeg tzdata wget
 
