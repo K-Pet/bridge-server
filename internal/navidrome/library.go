@@ -36,14 +36,9 @@ type AlbumSongs struct {
 func (c *Client) GetSong(ctx context.Context, songID string) (*SongInfo, error) {
 	url := fmt.Sprintf("%s/api/song/%s", c.baseURL, songID)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("X-ND-Authorization", "Bearer "+c.jwt)
-	req.Header.Set("X-ND-Client-Unique-Id", "bridge-server")
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doNative(ctx, func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, "GET", url, nil)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get song request failed: %w", err)
 	}
@@ -74,14 +69,9 @@ func (c *Client) GetAlbumSongs(ctx context.Context, albumID string) (*AlbumSongs
 	url := fmt.Sprintf("%s/api/song?_end=500&_order=ASC&_sort=album,discNumber,trackNumber&_start=0&album_id=%s",
 		c.baseURL, albumID)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("X-ND-Authorization", "Bearer "+c.jwt)
-	req.Header.Set("X-ND-Client-Unique-Id", "bridge-server")
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doNative(ctx, func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, "GET", url, nil)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get album songs request failed: %w", err)
 	}
@@ -109,14 +99,10 @@ func (c *Client) GetAlbumSongs(ctx context.Context, albumID string) (*AlbumSongs
 // Should be called after a scan has marked deleted files as missing.
 func (c *Client) PurgeMissing(ctx context.Context) error {
 	url := fmt.Sprintf("%s/api/missing", c.baseURL)
-	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-ND-Authorization", "Bearer "+c.jwt)
-	req.Header.Set("X-ND-Client-Unique-Id", "bridge-server")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doNative(ctx, func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	})
 	if err != nil {
 		return fmt.Errorf("purge missing files failed: %w", err)
 	}

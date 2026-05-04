@@ -6,12 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bridgemusic/bridge-server/internal/config"
@@ -21,8 +23,13 @@ type Client struct {
 	baseURL    string
 	username   string
 	password   string
-	jwt        string
 	httpClient *http.Client
+
+	// jwt is Navidrome's native-API session token. Navidrome expires it
+	// after ~48h, so doNative refreshes it on 401. The mutex guards both
+	// the field and concurrent re-auth attempts.
+	jwtMu sync.RWMutex
+	jwt   string
 
 	// musicDir is the host-side music directory (e.g. "./data/music").
 	// Used to translate Navidrome-relative paths to host filesystem paths.
@@ -69,8 +76,51 @@ func (c *Client) Authenticate(ctx context.Context) error {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return fmt.Errorf("failed to decode auth response: %w", err)
 	}
-	c.jwt = result.Token
+	c.setJWT(result.Token)
 	return nil
+}
+
+func (c *Client) currentJWT() string {
+	c.jwtMu.RLock()
+	defer c.jwtMu.RUnlock()
+	return c.jwt
+}
+
+func (c *Client) setJWT(token string) {
+	c.jwtMu.Lock()
+	defer c.jwtMu.Unlock()
+	c.jwt = token
+}
+
+// doNative executes a Navidrome native-API request, automatically
+// re-authenticating and retrying once on 401. The build func is invoked
+// twice on retry, so it must not consume a non-replayable body.
+func (c *Client) doNative(ctx context.Context, build func(context.Context) (*http.Request, error)) (*http.Response, error) {
+	resp, err := c.sendNative(ctx, build)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		return resp, nil
+	}
+	// JWT expired (Navidrome's session timeout, ~48h by default).
+	// Drop the response, re-auth, and try once more.
+	resp.Body.Close()
+	if err := c.Authenticate(ctx); err != nil {
+		return nil, fmt.Errorf("re-authenticate after 401: %w", err)
+	}
+	slog.Info("navidrome jwt refreshed after 401")
+	return c.sendNative(ctx, build)
+}
+
+func (c *Client) sendNative(ctx context.Context, build func(context.Context) (*http.Request, error)) (*http.Response, error) {
+	req, err := build(ctx)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-ND-Authorization", "Bearer "+c.currentJWT())
+	req.Header.Set("X-ND-Client-Unique-Id", "bridge-server")
+	return c.httpClient.Do(req)
 }
 
 // subsonicParams returns Subsonic API auth query parameters.
@@ -105,7 +155,7 @@ func (c *Client) ProxyHandler(cfg *config.Config) http.Handler {
 			req.URL.RawQuery = q.Encode()
 		} else {
 			// Native API: inject JWT header
-			req.Header.Set("X-ND-Authorization", "Bearer "+c.jwt)
+			req.Header.Set("X-ND-Authorization", "Bearer "+c.currentJWT())
 		}
 	}
 
