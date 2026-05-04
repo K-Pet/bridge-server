@@ -4,6 +4,7 @@ import { initConfig, getConfig, getSupabase, isDevMode } from './lib/supabase'
 import { getOnboardingStatus, type OnboardingStatus } from './lib/api'
 import type { Session } from '@supabase/supabase-js'
 import { PlayerProvider } from './context/PlayerContext'
+import { ImportProvider } from './context/ImportContext'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Onboarding from './pages/Onboarding'
@@ -14,6 +15,7 @@ import Playlists from './pages/Playlists'
 import PlaylistDetail from './pages/PlaylistDetail'
 import Marketplace from './pages/Marketplace'
 import Settings from './pages/Settings'
+import Import from './pages/Import'
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -160,18 +162,21 @@ export default function App() {
 
   return (
     <PlayerProvider>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path="/" element={<Library />} />
-          <Route path="/artist/:id" element={<ArtistDetail />} />
-          <Route path="/album/:id" element={<AlbumDetail />} />
-          <Route path="/playlists" element={<Playlists />} />
-          <Route path="/playlist/:id" element={<PlaylistDetail />} />
-          <Route path="/marketplace" element={<Marketplace />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
+      <ImportProvider>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<Library />} />
+            <Route path="/artist/:id" element={<ArtistDetail />} />
+            <Route path="/album/:id" element={<AlbumDetail />} />
+            <Route path="/playlists" element={<Playlists />} />
+            <Route path="/playlist/:id" element={<PlaylistDetail />} />
+            <Route path="/marketplace" element={<Marketplace />} />
+            <Route path="/import" element={<Import />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </ImportProvider>
     </PlayerProvider>
   )
 }

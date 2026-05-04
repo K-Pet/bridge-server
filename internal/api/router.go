@@ -7,6 +7,7 @@ import (
 
 	"github.com/bridgemusic/bridge-server/internal/auth"
 	"github.com/bridgemusic/bridge-server/internal/config"
+	"github.com/bridgemusic/bridge-server/internal/library"
 	"github.com/bridgemusic/bridge-server/internal/navidrome"
 	"github.com/bridgemusic/bridge-server/internal/store"
 	"github.com/bridgemusic/bridge-server/internal/supabase"
@@ -20,6 +21,7 @@ func NewRouter(
 	hub *EventHub,
 	sc *supabase.Client,
 	verifier *supabase.AuthVerifier,
+	importMgr *library.Manager,
 ) http.Handler {
 	mux := http.NewServeMux()
 
@@ -63,6 +65,25 @@ func NewRouter(
 	if nd != nil {
 		authed.HandleFunc("DELETE /api/library/songs/{id}", handleDeleteSong(cfg, nd, queue, hub))
 		authed.HandleFunc("DELETE /api/library/albums/{id}", handleDeleteAlbum(cfg, nd, queue, hub))
+	}
+
+	// Library import (user-owned music upload). Manager exists even
+	// without Navidrome so the dev environment can exercise the
+	// upload/plan flow; the post-commit scan trigger inside the
+	// commit handler no-ops when nd is nil. Files upload via a
+	// chunked Content-Range PUT flow so a single request never hits
+	// the proxy/edge body-size cap (Cloudflare's free plan caps at
+	// 100 MiB) or per-request stream timeouts.
+	if importMgr != nil {
+		authed.HandleFunc("POST /api/library/import/sessions", handleCreateImportSession(importMgr))
+		authed.HandleFunc("GET /api/library/import/sessions/{id}", handleGetImportSession(importMgr))
+		authed.HandleFunc("POST /api/library/import/sessions/{id}/uploads", handleBeginUpload(importMgr))
+		authed.HandleFunc("PUT /api/library/import/sessions/{id}/uploads/{uploadId}", handleWriteChunk(importMgr))
+		authed.HandleFunc("POST /api/library/import/sessions/{id}/uploads/{uploadId}/finalize", handleFinalizeUpload(importMgr))
+		authed.HandleFunc("DELETE /api/library/import/sessions/{id}/uploads/{uploadId}", handleAbortUpload(importMgr))
+		authed.HandleFunc("POST /api/library/import/sessions/{id}/items/{itemId}/skip", handleSkipImportItem(importMgr))
+		authed.HandleFunc("POST /api/library/import/sessions/{id}/commit", handleCommitImportSession(importMgr, nd, hub))
+		authed.HandleFunc("DELETE /api/library/import/sessions/{id}", handleAbortImportSession(importMgr))
 	}
 
 	// Onboarding endpoints

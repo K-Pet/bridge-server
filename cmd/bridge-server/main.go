@@ -12,6 +12,7 @@ import (
 
 	"github.com/bridgemusic/bridge-server/internal/api"
 	"github.com/bridgemusic/bridge-server/internal/config"
+	"github.com/bridgemusic/bridge-server/internal/library"
 	"github.com/bridgemusic/bridge-server/internal/navidrome"
 	"github.com/bridgemusic/bridge-server/internal/poller"
 	"github.com/bridgemusic/bridge-server/internal/store"
@@ -89,8 +90,15 @@ func main() {
 	// that case.
 	verifier := supabase.NewAuthVerifier(cfg.SupabaseURL, cfg.SupabaseAnonKey, 0)
 
+	// Library importer: in-memory session manager backed by a
+	// staging directory under the music root. Janitor below sweeps
+	// abandoned uploads so disk doesn't fill from half-finished
+	// imports.
+	importMgr := library.NewManager(cfg.MusicDir)
+	go runImportJanitor(ctx, importMgr)
+
 	// Build HTTP server
-	router := api.NewRouter(cfg, ndClient, queue, hub, sbClient, verifier)
+	router := api.NewRouter(cfg, ndClient, queue, hub, sbClient, verifier, importMgr)
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
 		Handler: router,
@@ -125,4 +133,22 @@ func (p eventPublisher) PublishTaskEvent(eventType, purchaseID, taskID, status s
 		Status:   status,
 		Data:     data,
 	})
+}
+
+// runImportJanitor sweeps abandoned import sessions every hour. The
+// session manager itself enforces the per-session TTL — this just
+// gives it a heartbeat. Stops when ctx is cancelled (server shutdown).
+func runImportJanitor(ctx context.Context, mgr *library.Manager) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			if n := mgr.ReapStale(now); n > 0 {
+				slog.Info("import janitor reaped sessions", "count", n)
+			}
+		}
+	}
 }

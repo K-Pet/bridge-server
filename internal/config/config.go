@@ -135,10 +135,10 @@ func Load() (*Config, error) {
 	}
 
 	// Auto-mint per-server identity if not handed in via env. Stays
-	// gated on !DevMode so `tilt up` keeps the stable `local-dev`
-	// ServerID and doesn't drop a credentials.json into the dev data
-	// dir (where it would survive `rm -rf data/` resets and confuse
-	// the marketplace's user_home_servers row by user_id).
+	// gated on !DevMode so `tilt up` keeps a stable sentinel ServerID
+	// and doesn't drop a credentials.json into the dev data dir (where
+	// it would survive `rm -rf data/` resets and confuse the
+	// marketplace's user_home_servers row by user_id).
 	if !cfg.DevMode {
 		if err := loadOrMintCredentials(cfg); err != nil {
 			return nil, fmt.Errorf("credentials: %w", err)
@@ -147,8 +147,25 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("BRIDGE_SUPABASE_URL is required")
 		}
 	}
-	if cfg.DevMode && cfg.ServerID == "" {
-		cfg.ServerID = "local-dev"
+	if cfg.DevMode {
+		// 32-hex-char sentinel (0xDEADBEEF × 4). Matches the format
+		// the marketplace's register-home-server EF validates, so
+		// auto-pair works in dev. Stable across resets — never
+		// changes, never gets minted to disk — so the marketplace's
+		// user_home_servers row stays bound to the same id no matter
+		// how many times the dev data dir gets nuked.
+		if cfg.ServerID == "" {
+			cfg.ServerID = "deadbeefdeadbeefdeadbeefdeadbeef"
+		}
+		// Webhook secret has the same shape constraint (64 hex chars
+		// = 32-byte HMAC key) and the same EF validation. Hold it to
+		// the same sentinel pattern so the dev path "just works" when
+		// .env.local doesn't override it — and so an env override of
+		// non-hex placeholder text (the historical default) doesn't
+		// silently break auto-pair.
+		if cfg.WebhookSecret == "" {
+			cfg.WebhookSecret = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+		}
 	}
 
 	return cfg, nil

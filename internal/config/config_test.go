@@ -27,12 +27,17 @@ func withEnv(t *testing.T, env map[string]string) {
 	}
 }
 
+// devSentinelServerID is the dev-mode fallback (32 hex chars so the
+// marketplace's register-home-server EF accepts it). Kept here as a
+// single-source so tests don't drift from the production fallback.
+const devSentinelServerID = "deadbeefdeadbeefdeadbeefdeadbeef"
+
 // Tilt path: BRIDGE_DEV=true with no BRIDGE_SERVER_ID. We must NOT
 // auto-mint (would scatter credentials.json into the dev data dir,
 // which would survive `rm -rf data/` partial resets and bind a stale
 // id to the marketplace's user_home_servers row); instead the loader
-// falls back to the stable "local-dev" sentinel.
-func TestLoad_DevModeKeepsLocalDev(t *testing.T) {
+// falls back to the stable 32-hex-char sentinel.
+func TestLoad_DevModeKeepsSentinel(t *testing.T) {
 	dir := t.TempDir()
 	withEnv(t, map[string]string{
 		"BRIDGE_DEV":  "true",
@@ -43,8 +48,8 @@ func TestLoad_DevModeKeepsLocalDev(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.ServerID != "local-dev" {
-		t.Errorf("ServerID = %q, want local-dev", cfg.ServerID)
+	if cfg.ServerID != devSentinelServerID {
+		t.Errorf("ServerID = %q, want %q", cfg.ServerID, devSentinelServerID)
 	}
 	if _, err := os.Stat(filepath.Join(dir, credentialsFilename)); !os.IsNotExist(err) {
 		t.Errorf("credentials.json should NOT exist in DevMode, got err=%v", err)
@@ -91,8 +96,8 @@ func TestLoad_ProdAutoMintsAndPersists(t *testing.T) {
 	if cfg.ServerID == "" || cfg.WebhookSecret == "" {
 		t.Fatalf("auto-mint failed: id=%q secret=%q", cfg.ServerID, cfg.WebhookSecret)
 	}
-	if cfg.ServerID == "local-dev" {
-		t.Errorf("ServerID should not be local-dev outside DevMode")
+	if cfg.ServerID == devSentinelServerID {
+		t.Errorf("ServerID should not be the dev sentinel outside DevMode")
 	}
 
 	info, err := os.Stat(filepath.Join(dir, credentialsFilename))
