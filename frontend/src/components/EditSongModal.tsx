@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { updateSongTags, type SongTagsUpdate } from '../lib/api'
+import { identifySong, updateSongTags, type IdentifyCandidate, type SongTagsUpdate } from '../lib/api'
+import { getConfig } from '../lib/supabase'
 import type { Song } from '../lib/subsonic'
 
 // Formats the server's tagwriter package can currently mutate. Keep
@@ -74,9 +75,54 @@ export default function EditSongModal({ song, onClose, onSaved }: Props) {
   const [form, setForm] = useState<FormState>(initialRef.current)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [identifying, setIdentifying] = useState(false)
+  const [candidates, setCandidates] = useState<IdentifyCandidate[] | null>(null)
 
   const suffix = (song.suffix ?? '').toLowerCase()
   const editable = EDITABLE_SUFFIXES.has(suffix)
+  // getConfig throws if called before initConfig — guard so the modal
+  // doesn't crash if it somehow mounts before the app's config-fetch
+  // settles (e.g. during a hot-reload).
+  let acoustidAvailable = false
+  try {
+    acoustidAvailable = !!getConfig().acoustid_available
+  } catch {
+    acoustidAvailable = false
+  }
+
+  async function handleIdentify() {
+    setIdentifying(true)
+    setError('')
+    setCandidates(null)
+    try {
+      const res = await identifySong(song.id)
+      setCandidates(res.candidates)
+      if (res.candidates.length === 0) {
+        setError('No MusicBrainz matches found for this track.')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Identify failed')
+    } finally {
+      setIdentifying(false)
+    }
+  }
+
+  function applyCandidate(c: IdentifyCandidate) {
+    // Fill the form with the candidate's values. The user can still
+    // tweak before saving — we don't auto-submit, since AcoustID can
+    // return matches at low confidence that aren't actually right.
+    setForm(prev => ({
+      ...prev,
+      title: c.title || prev.title,
+      artist: c.artist || prev.artist,
+      album_artist: c.album_artist || prev.album_artist,
+      album: c.album || prev.album,
+      year: c.year ? String(c.year) : prev.year,
+      track_number: c.track_number ? String(c.track_number) : prev.track_number,
+      disc_number: c.disc_number ? String(c.disc_number) : prev.disc_number,
+    }))
+    setCandidates(null)
+  }
 
   // Escape-to-close — wired to document so it works even when the
   // modal hasn't grabbed focus yet (e.g. user keyboards in from the
@@ -123,6 +169,40 @@ export default function EditSongModal({ song, onClose, onSaved }: Props) {
           <div className="modal-warning">
             Editing tags on <code>.{suffix || 'unknown'}</code> files isn't supported yet. Currently
             only <code>.mp3</code> and <code>.flac</code> can be edited.
+          </div>
+        )}
+
+        {acoustidAvailable && editable && (
+          <div className="modal-identify">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleIdentify}
+              disabled={identifying || saving}
+            >
+              {identifying ? 'Identifying…' : 'Identify with MusicBrainz'}
+            </button>
+            {candidates && candidates.length > 0 && (
+              <ul className="candidate-list">
+                {candidates.map(c => (
+                  <li key={c.recording_id}>
+                    <button type="button" className="candidate-row" onClick={() => applyCandidate(c)}>
+                      <span className="candidate-score" title={`AcoustID score: ${c.score.toFixed(2)}`}>
+                        {Math.round(c.score * 100)}%
+                      </span>
+                      <span className="candidate-meta">
+                        <span className="candidate-title">{c.title}</span>
+                        <span className="candidate-sub">
+                          {c.artist}
+                          {c.album ? ` · ${c.album}` : ''}
+                          {c.year ? ` (${c.year})` : ''}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
 

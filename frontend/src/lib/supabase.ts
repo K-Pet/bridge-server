@@ -10,6 +10,10 @@ export interface AppConfig {
   // the widget — matches the behavior of the local Supabase config
   // where [auth.captcha] is commented out.
   hcaptcha_site_key: string
+  // Whether the server has BRIDGE_ACOUSTID_KEY configured. Drives the
+  // visibility of the "identify with MusicBrainz" affordance in the
+  // metadata editor.
+  acoustid_available?: boolean
   // Dev-only: test credentials for auto-sign-in (never present in prod).
   dev_email?: string
   dev_password?: string

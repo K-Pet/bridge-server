@@ -148,6 +148,30 @@ export async function updateSongTags(songId: string, tags: SongTagsUpdate) {
   )
 }
 
+// IdentifyCandidate mirrors autotag.Candidate on the Go side. Score
+// is AcoustID confidence (0–1); track/disc/year are optional because
+// MusicBrainz doesn't always have release-level metadata for a
+// recording.
+export interface IdentifyCandidate {
+  score: number
+  recording_id: string
+  title: string
+  artist: string
+  album_artist?: string
+  album?: string
+  year?: number
+  track_number?: number
+  disc_number?: number
+  musicbrainz_url?: string
+}
+
+export async function identifySong(songId: string) {
+  return apiFetch<{ song_id: string; candidates: IdentifyCandidate[] }>(
+    `/api/library/songs/${encodeURIComponent(songId)}/identify`,
+    { method: 'POST' }
+  )
+}
+
 export async function deleteAlbum(albumId: string) {
   return apiFetch<{ deleted: boolean; album_id: string; song_count: number; scanning: boolean }>(
     `/api/library/albums/${encodeURIComponent(albumId)}`,
