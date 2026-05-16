@@ -22,11 +22,14 @@ interface Props {
 // FormState mirrors the SongTagsUpdate payload but uses strings for
 // numeric fields so empty inputs are first-class (string vs. NaN is
 // easier to reason about than a number that might be 0 or undefined).
+//
+// Song-scope edits never include `album` or `album_artist` — those are
+// album-wide attributes. Letting a single song change them would split
+// it off into a phantom album under a different artist. Album-level
+// fields are exposed only by EditAlbumModal.
 interface FormState {
   title: string
   artist: string
-  album_artist: string
-  album: string
   year: string
   track_number: string
   disc_number: string
@@ -37,8 +40,6 @@ function songToForm(song: Song): FormState {
   return {
     title: song.title ?? '',
     artist: song.artist ?? '',
-    album_artist: '',
-    album: song.album ?? '',
     year: song.year != null ? String(song.year) : '',
     track_number: song.track != null ? String(song.track) : '',
     disc_number: song.discNumber != null ? String(song.discNumber) : '',
@@ -53,8 +54,6 @@ function diffForm(initial: FormState, current: FormState): SongTagsUpdate {
   const patch: SongTagsUpdate = {}
   if (current.title !== initial.title) patch.title = current.title
   if (current.artist !== initial.artist) patch.artist = current.artist
-  if (current.album_artist !== initial.album_artist) patch.album_artist = current.album_artist
-  if (current.album !== initial.album) patch.album = current.album
   if (current.year !== initial.year) {
     const n = parseInt(current.year, 10)
     patch.year = Number.isFinite(n) && n > 0 ? n : 0
@@ -112,15 +111,21 @@ export default function EditSongModal({ song, onClose, onSaved }: Props) {
     // Fill the form with the candidate's values. The user can still
     // tweak before saving — we don't auto-submit, since AcoustID can
     // return matches at low confidence that aren't actually right.
+    //
+    // disc_number is only auto-applied for true multi-disc releases
+    // (> 1): MusicBrainz returns position=1 for single-disc albums
+    // by default, and writing an explicit DISC=1 to one track while
+    // its sibling tracks have no DISC tag at all causes Navidrome to
+    // surface them as separate discs.
+    // Song-scope only — album/album_artist live on the album edit
+     // modal and shouldn't be touched by a per-track identify.
     setForm(prev => ({
       ...prev,
       title: c.title || prev.title,
       artist: c.artist || prev.artist,
-      album_artist: c.album_artist || prev.album_artist,
-      album: c.album || prev.album,
       year: c.year ? String(c.year) : prev.year,
       track_number: c.track_number ? String(c.track_number) : prev.track_number,
-      disc_number: c.disc_number ? String(c.disc_number) : prev.disc_number,
+      disc_number: c.disc_number && c.disc_number > 1 ? String(c.disc_number) : prev.disc_number,
     }))
     setCandidates(null)
   }
@@ -214,21 +219,13 @@ export default function EditSongModal({ song, onClose, onSaved }: Props) {
           </label>
           <label>
             <span>Artist</span>
-            <input type="text" value={form.artist} onChange={e => update('artist', e.target.value)} disabled={!editable || saving} />
-          </label>
-          <label>
-            <span>Album artist</span>
             <input
               type="text"
-              value={form.album_artist}
-              onChange={e => update('album_artist', e.target.value)}
-              placeholder="(leave blank to keep)"
+              value={form.artist}
+              onChange={e => update('artist', e.target.value)}
+              placeholder="e.g. Drake feat. 21 Savage"
               disabled={!editable || saving}
             />
-          </label>
-          <label>
-            <span>Album</span>
-            <input type="text" value={form.album} onChange={e => update('album', e.target.value)} disabled={!editable || saving} />
           </label>
           <div className="modal-row">
             <label>

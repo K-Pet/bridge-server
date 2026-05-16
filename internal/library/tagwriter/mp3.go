@@ -3,6 +3,7 @@ package tagwriter
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/bogem/id3v2/v2"
 )
@@ -15,9 +16,17 @@ import (
 // already has v2.3 tags they're upgraded to v2.4 on save, which
 // every modern player (including Navidrome's underlying tag parser)
 // handles fine.
+//
+// bogem only supports v2.3 and v2.4. Files with the older v2.2 layout
+// (common in iTunes-era MP3s) trip its "unsupported version" error;
+// we fall back to ffmpeg in that case, which transparently rewrites
+// the tag header as v2.4 while copying the audio frames untouched.
 func writeMP3(path string, t Tags) error {
 	tag, err := id3v2.Open(path, id3v2.Options{Parse: true})
 	if err != nil {
+		if isUnsupportedID3Version(err) {
+			return writeViaFFmpeg(path, t)
+		}
 		return fmt.Errorf("open mp3: %w", err)
 	}
 	defer tag.Close()
@@ -71,4 +80,13 @@ func writeMP3(path string, t Tags) error {
 		return fmt.Errorf("save mp3 tags: %w", err)
 	}
 	return nil
+}
+
+// isUnsupportedID3Version detects the specific bogem/id3v2 error for
+// pre-v2.3 (v2.2) tags. The library doesn't export a typed error for
+// this, so we string-match — fragile, but the message has been stable
+// across releases and the alternative is parsing the file header
+// ourselves before every open.
+func isUnsupportedID3Version(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "unsupported version of ID3 tag")
 }

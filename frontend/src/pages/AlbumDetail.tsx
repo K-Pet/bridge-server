@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { getAlbum, coverArtUrl, formatDuration, formatDurationLong, type Album, type Song } from '../lib/subsonic'
+import { getAlbum, coverArtUrl, findAlbumByName, formatDuration, formatDurationLong, SubsonicNotFoundError, type Album, type Song } from '../lib/subsonic'
 import { deleteSong, deleteAlbum, subscribeEvents, uploadAlbumCover } from '../lib/api'
 import { usePlayer } from '../context/PlayerContext'
 import EditSongModal from '../components/EditSongModal'
+import EditAlbumModal from '../components/EditAlbumModal'
 
 export default function AlbumDetail() {
   const { id } = useParams<{ id: string }>()
@@ -16,24 +17,73 @@ export default function AlbumDetail() {
   const [deletingSong, setDeletingSong] = useState<string | null>(null)
   const [editingSong, setEditingSong] = useState<Song | null>(null)
   const [uploadingCover, setUploadingCover] = useState(false)
-  // coverNonce busts the <img> cache after a successful upload so the
-  // user sees the new image without a hard reload. Subsonic returns
-  // the same coverArt id even when the underlying file changes.
-  const [coverNonce, setCoverNonce] = useState(0)
+  // localCoverURL is a blob URL of the just-uploaded image. We display
+  // it immediately so the user sees their change without waiting for
+  // Navidrome's scan + cover-thumbnailing cycle to invalidate the
+  // Subsonic getCoverArt cache (which can lag by 5–10s on big libraries
+  // and made earlier versions of this flow feel like the upload had
+  // failed). Cleared when a fresh getAlbum response confirms the new
+  // coverArt id has propagated.
+  const [localCoverURL, setLocalCoverURL] = useState<string | null>(null)
+  const [editingAlbum, setEditingAlbum] = useState(false)
   const coverInputRef = useRef<HTMLInputElement | null>(null)
+  // pendingName tracks the title the user *intended* after a rename
+  // so refresh() can search for the new id once Navidrome rescans.
+  // Without this we'd have nothing to look up — the URL still carries
+  // the old id and the album object on screen still carries the old
+  // name until the next successful fetch.
+  const pendingNameRef = useRef<{ album: string; artist: string } | null>(null)
   const { playSong, playAlbum, currentSong, isPlaying } = usePlayer()
 
   // refresh re-fetches the album so freshly-written tags show up after
   // Navidrome finishes its rescan. Used both by the edit flow's
   // onSaved callback (optimistic refresh) and the SSE listener below.
-  function refresh() {
+  //
+  // If the id has gone stale (a rename changed Navidrome's hash-based
+  // id) we search for the new entry by the just-saved name and
+  // navigate there with replace:true so the back stack stays sane.
+  // When the search comes up empty too we fall back to a safe parent
+  // (the artist page, or library) rather than render a 404.
+  async function refresh() {
     if (!id) return
-    getAlbum(id)
-      .then(({ album, songs }) => {
-        setAlbum(album)
-        setSongs(songs)
-      })
-      .catch(e => setError(e.message))
+    try {
+      const result = await getAlbum(id)
+      setAlbum(result.album)
+      setSongs(result.songs)
+      // Clear the pending rename target ONLY when Navidrome reports
+      // the new name — the first refresh after save normally returns
+      // the pre-scan state (the server kicks scan off async), and we
+      // need to hold the search target for the SSE-driven retry once
+      // Navidrome catches up. Without this guard the recovery search
+      // runs against the old (current screen) name and finds nothing.
+      const pending = pendingNameRef.current
+      if (pending && result.album.name.trim().toLowerCase() === pending.album.trim().toLowerCase()) {
+        pendingNameRef.current = null
+      }
+    } catch (e) {
+      if (e instanceof SubsonicNotFoundError) {
+        // Prefer the pending rename target — that's the new name the
+        // user just saved. Fall back to the current on-screen album
+        // values only when there's no rename in flight (e.g. a sibling
+        // device deleted the album).
+        const targets: Array<{ album: string; artist: string }> = []
+        if (pendingNameRef.current) targets.push(pendingNameRef.current)
+        if (album) targets.push({ album: album.name, artist: album.artist })
+        for (const t of targets) {
+          try {
+            const found = await findAlbumByName(t.album, t.artist)
+            if (found) {
+              pendingNameRef.current = null
+              navigate(`/album/${found.id}`, { replace: true })
+              return
+            }
+          } catch { /* try the next target */ }
+        }
+        navigate(album?.artistId ? `/artist/${album.artistId}` : '/', { replace: true })
+        return
+      }
+      setError(e instanceof Error ? e.message : String(e))
+    }
   }
 
   useEffect(() => {
@@ -44,7 +94,16 @@ export default function AlbumDetail() {
         setAlbum(album)
         setSongs(songs)
       })
-      .catch(e => setError(e.message))
+      .catch(e => {
+        if (e instanceof SubsonicNotFoundError) {
+          // The URL is stale (likely a bookmark to a since-renamed
+          // album). No on-page context to search by — bounce to
+          // library so the user can find what they were looking for.
+          navigate('/', { replace: true })
+          return
+        }
+        setError(e instanceof Error ? e.message : String(e))
+      })
       .finally(() => setLoading(false))
   }, [id])
 
@@ -116,18 +175,36 @@ export default function AlbumDetail() {
     setUploadingCover(true)
     try {
       await uploadAlbumCover(id, file)
-      // Bump the nonce so the cover-art URL changes — Subsonic's
-      // coverArt id is stable, so without this the cached image
-      // stays on screen until the user hard-refreshes.
-      setCoverNonce(n => n + 1)
-      // The server kicked off a Navidrome rescan; the SSE
-      // library_updated event will re-fetch the album for us.
+      // Show the just-uploaded image immediately. The blob URL
+      // outlives this scope (it's referenced by the <img>); we
+      // revoke it once the next refresh confirms the new server
+      // copy is live. Worst case it leaks until the page unmounts,
+      // which the unmount cleanup below handles.
+      const url = URL.createObjectURL(file)
+      setLocalCoverURL(prev => {
+        if (prev) URL.revokeObjectURL(prev)
+        return url
+      })
+      // The server already finished its synchronous rescan before
+      // returning (StartScan blocks until completion), so kick off
+      // a refresh now. If Subsonic still serves a stale cover,
+      // localCoverURL keeps the user covered.
+      refresh()
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Cover upload failed')
     } finally {
       setUploadingCover(false)
     }
   }
+
+  // Revoke the blob URL when the component unmounts or the album
+  // changes — these are short-lived references, but the browser
+  // doesn't reclaim them automatically.
+  useEffect(() => {
+    return () => {
+      if (localCoverURL) URL.revokeObjectURL(localCoverURL)
+    }
+  }, [localCoverURL])
 
   if (loading) return <div className="loading">Loading album...</div>
   if (error) return <div className="error-page">Error: {error}</div>
@@ -136,7 +213,12 @@ export default function AlbumDetail() {
   const totalDuration = songs.reduce((sum, s) => sum + s.duration, 0)
   const isCurrentAlbum = currentSong && songs.some(s => s.id === currentSong.id)
 
-  const discNumbers = [...new Set(songs.map(s => s.discNumber ?? 1))].sort((a, b) => a - b)
+  // Treat 0 / undefined / missing as "disc 1" — Navidrome surfaces
+  // discNumber=0 when the file has no DISC tag at all, and our UI
+  // shouldn't fragment a single-disc album into "disc 0" and "disc 1"
+  // sections just because some files have the tag and some don't.
+  const effectiveDisc = (n: number | undefined) => (n && n > 0 ? n : 1)
+  const discNumbers = [...new Set(songs.map(s => effectiveDisc(s.discNumber)))].sort((a, b) => a - b)
   const isMultiDisc = discNumbers.length > 1
 
   return (
@@ -154,11 +236,10 @@ export default function AlbumDetail() {
           disabled={uploadingCover}
           title="Click to change cover"
         >
-          {album.coverArt ? (
-            <img
-              src={`${coverArtUrl(album.coverArt, 400)}&v=${coverNonce}`}
-              alt={album.name}
-            />
+          {localCoverURL ? (
+            <img src={localCoverURL} alt={album.name} />
+          ) : album.coverArt ? (
+            <img src={coverArtUrl(album.coverArt, 400)} alt={album.name} />
           ) : (
             <div className="cover-placeholder large">
               <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" /></svg>
@@ -203,6 +284,14 @@ export default function AlbumDetail() {
               Shuffle
             </button>
             <button
+              className="btn-secondary"
+              onClick={() => setEditingAlbum(true)}
+              title="Edit album metadata"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /></svg>
+              Edit
+            </button>
+            <button
               className="btn-delete"
               onClick={handleDeleteAlbum}
               disabled={deletingAlbum}
@@ -226,7 +315,7 @@ export default function AlbumDetail() {
         </div>
         {isMultiDisc
           ? discNumbers.flatMap(disc => {
-              const discSongs = songs.filter(s => (s.discNumber ?? 1) === disc)
+              const discSongs = songs.filter(s => effectiveDisc(s.discNumber) === disc)
               return [
                 <div key={`disc-${disc}`} className="disc-header">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 14c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
@@ -339,6 +428,23 @@ export default function AlbumDetail() {
             // here too so the table reorders quickly if the user
             // changed track number — Subsonic returns updated tags
             // as soon as the scan is finished.
+            refresh()
+          }}
+        />
+      )}
+
+      {editingAlbum && album && (
+        <EditAlbumModal
+          album={album}
+          onClose={() => setEditingAlbum(false)}
+          onSaved={(patch) => {
+            // Capture the post-edit identity so refresh() can find the
+            // album by name if Navidrome's id shifted. Use the user's
+            // patch when present, else the current values as a no-op.
+            pendingNameRef.current = {
+              album: patch.album ?? album.name,
+              artist: patch.album_artist || album.artist,
+            }
             refresh()
           }}
         />

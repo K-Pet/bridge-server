@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +17,9 @@ import (
 
 	"github.com/bridgemusic/bridge-server/internal/auth"
 	"github.com/bridgemusic/bridge-server/internal/config"
+	"github.com/bridgemusic/bridge-server/internal/navidrome"
 	"github.com/bridgemusic/bridge-server/internal/store"
+	"github.com/bridgemusic/bridge-server/internal/supabase"
 )
 
 // All Supabase calls in this file run with the user's forwarded JWT
@@ -710,4 +714,179 @@ func handleGetSettings(cfg *config.Config) http.HandlerFunc {
 			"poll_interval": cfg.PollInterval.String(),
 		})
 	}
+}
+
+// freshAuthMaxAge bounds how recently a Supabase JWT must have been
+// issued for the credential-reveal endpoint to honor it. Five minutes
+// is short enough that an unattended laptop with a stale tab can't be
+// used to walk away with admin creds, long enough that a real user
+// who just re-authenticated isn't fighting the clock.
+const freshAuthMaxAge = 5 * time.Minute
+
+// handleGetNavidromeCreds reveals the admin username/password the
+// bridge-server bootstrapped for Navidrome. Behind a fresh-auth gate:
+// the caller's JWT must have been issued within freshAuthMaxAge.
+//
+// Rationale: Navidrome's admin account can mutate the entire library
+// (delete songs, change tags, edit playlists for any user). The
+// regular session is good for the bridge UI's surface area; the
+// underlying admin password warrants a stronger proof of presence.
+// The frontend implements this by asking the user to re-enter their
+// Supabase password, which mints a fresh JWT — same pattern banks
+// use when revealing card details inside an already-logged-in app.
+func handleGetNavidromeCreds(cfg *config.Config, nd *navidrome.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if auth.UserID(r.Context()) == "" {
+			writeJSONError(w, http.StatusUnauthorized, "unauthorized", "Sign in required.")
+			return
+		}
+		if nd == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "no_navidrome", "Navidrome client not configured.")
+			return
+		}
+
+		// The bearer token survives auth.Middleware on the Authorization
+		// header; pull it out again to inspect the iat claim. Stripping
+		// "Bearer " is safe because the middleware already required the
+		// prefix when verifying.
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if token == "" {
+			writeJSONError(w, http.StatusUnauthorized, "no_token", "Bearer token required.")
+			return
+		}
+
+		// Dev mode bypass: the auth middleware admits any token in
+		// BRIDGE_DEV=true, and the dev "Bearer dev" sentinel won't parse
+		// as a real JWT. Skip the freshness check rather than 401 on a
+		// path the middleware already cleared.
+		if cfg.DevMode {
+			slog.Info("navidrome credential endpoint: skipping iat freshness check (dev mode)")
+		} else {
+			iat, err := supabase.JWTIssuedAt(token)
+			if err != nil {
+				writeJSONError(w, http.StatusUnauthorized, "invalid_token",
+					"Could not read token freshness: "+err.Error())
+				return
+			}
+			if time.Since(iat) > freshAuthMaxAge {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error":   "reauth_required",
+					"message": "Please re-enter your password to view these credentials.",
+					"max_age_seconds": int(freshAuthMaxAge.Seconds()),
+				})
+				return
+			}
+		}
+
+		username, password := nd.Credentials()
+
+		w.Header().Set("Content-Type", "application/json")
+		// Cache-Control:no-store keeps the response out of any
+		// downstream cache/log that might mirror request bodies (Vite
+		// HMR, browser back-cache, service workers).
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"username":      username,
+			"password":      password,
+			"navidrome_url": cfg.NavidromeURL,
+			// Relative path through the bridge-server reverse proxy.
+			// Works for browsers already authenticated to bridge.
+			"proxy_path": "/nd/",
+		})
+	}
+}
+
+// handleRotateNavidromePassword generates a fresh random Navidrome
+// admin password, applies it via Subsonic changePassword, persists it
+// to ${BRIDGE_DATA}/nd-credentials, and returns the new password
+// once. Same fresh-auth gate as the reveal endpoint — rotating the
+// password is even more sensitive (it can lock out other clients
+// that have the old password cached).
+//
+// Order matters: Navidrome accepts first, then we write to disk. If
+// the disk write fails, the in-memory client already holds the new
+// password so the running process keeps working; the next restart
+// would bootstrap a fresh admin (which fails because Navidrome
+// already has users) and surface a clear recovery message. The
+// failure mode is observable, not silent.
+func handleRotateNavidromePassword(cfg *config.Config, nd *navidrome.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if auth.UserID(r.Context()) == "" {
+			writeJSONError(w, http.StatusUnauthorized, "unauthorized", "Sign in required.")
+			return
+		}
+		if nd == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "no_navidrome", "Navidrome client not configured.")
+			return
+		}
+
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if token == "" {
+			writeJSONError(w, http.StatusUnauthorized, "no_token", "Bearer token required.")
+			return
+		}
+		if cfg.DevMode {
+			slog.Info("navidrome credential endpoint: skipping iat freshness check (dev mode)")
+		} else {
+			iat, err := supabase.JWTIssuedAt(token)
+			if err != nil {
+				writeJSONError(w, http.StatusUnauthorized, "invalid_token",
+					"Could not read token freshness: "+err.Error())
+				return
+			}
+			if time.Since(iat) > freshAuthMaxAge {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error":   "reauth_required",
+					"message": "Please re-enter your password before rotating the Navidrome admin password.",
+					"max_age_seconds": int(freshAuthMaxAge.Seconds()),
+				})
+				return
+			}
+		}
+
+		newPassword, err := randomHexPassword(32)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "rng_failed", "Failed to generate password.")
+			return
+		}
+
+		username, _ := nd.Credentials()
+		if err := nd.ChangeAdminPassword(r.Context(), newPassword); err != nil {
+			slog.Error("rotate navidrome password: change failed", "error", err)
+			writeJSONError(w, http.StatusBadGateway, "rotate_failed",
+				"Failed to change password in Navidrome: "+err.Error())
+			return
+		}
+
+		if err := navidrome.SaveAdminCredentials(cfg.DataDir, username, newPassword); err != nil {
+			// Navidrome already accepted the new password. Disk write
+			// failed — log loudly so the operator notices the drift,
+			// but don't fail the request (the client has the new
+			// password and we returned it; restart would re-bootstrap).
+			slog.Error("rotate navidrome password: disk persistence failed (in-memory creds still valid)", "error", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"rotated":  true,
+			"username": username,
+			"password": newPassword,
+		})
+	}
+}
+
+// randomHexPassword returns a hex-encoded random password of the
+// given byte length. 32 bytes → 64 hex chars, 256 bits of entropy.
+// Matches the strength of the password generated at first bootstrap.
+func randomHexPassword(byteLen int) (string, error) {
+	buf := make([]byte, byteLen)
+	if _, err := cryptorand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }

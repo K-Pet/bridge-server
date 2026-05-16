@@ -13,4 +13,15 @@ services:
       ND_DATAFOLDER: /data
       ND_LOGLEVEL: info
       ND_SCANSCHEDULE: "@every 1m"
+      # Folder-level cover art (cover.jpg etc.) wins over embedded
+      # ID3 APIC frames — the metadata editor's "Change cover" flow
+      # writes cover.jpg into the album folder, and we need that to
+      # actually appear in the app on the next rescan. Default is
+      # "embedded,cover.*,folder.*,front.*" which silently ignores
+      # admin-supplied folder art.
+      ND_COVERARTPRIORITY: "cover.*,folder.*,front.*,embedded"
+      # Same idea for artist photos. The "Change photo" flow writes
+      # artist.jpg/.png to the artist folder; we need it to beat the
+      # external agents (MusicBrainz/LastFM) so admin uploads stick.
+      ND_ARTISTARTPRIORITY: "artist.*,album/artist.*,external"
     restart: unless-stopped

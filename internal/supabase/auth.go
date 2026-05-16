@@ -17,10 +17,12 @@ package supabase
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -126,6 +128,36 @@ func (v *AuthVerifier) store(token, userID string) {
 		expiresAt: time.Now().Add(v.cacheTTL),
 	}
 	v.mu.Unlock()
+}
+
+// JWTIssuedAt extracts the `iat` claim from a Supabase JWT without
+// verifying the signature. The token has already been validated by
+// AuthVerifier upstream, so reading the unverified payload is safe
+// for freshness gating — we only care that the user-presented token
+// was issued by Supabase recently, not whether its cryptographic
+// signature is good (the middleware already proved that).
+//
+// Returns the issued-at time, or an error if the token is malformed
+// or the iat claim is missing.
+func JWTIssuedAt(token string) (time.Time, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return time.Time{}, errors.New("malformed jwt")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}, fmt.Errorf("decode jwt payload: %w", err)
+	}
+	var claims struct {
+		Iat int64 `json:"iat"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return time.Time{}, fmt.Errorf("parse jwt claims: %w", err)
+	}
+	if claims.Iat == 0 {
+		return time.Time{}, errors.New("jwt missing iat claim")
+	}
+	return time.Unix(claims.Iat, 0), nil
 }
 
 func (v *AuthVerifier) fetchUserID(ctx context.Context, token string) (string, error) {

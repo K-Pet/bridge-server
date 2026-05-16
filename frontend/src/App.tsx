@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { initConfig, getConfig, getSupabase, isDevMode } from './lib/supabase'
-import { getOnboardingStatus, type OnboardingStatus } from './lib/api'
+import { getOnboardingStatus, subscribeEvents, type OnboardingStatus } from './lib/api'
+import { bumpLibraryVersion } from './lib/library-version'
 import type { Session } from '@supabase/supabase-js'
 import { PlayerProvider } from './context/PlayerContext'
 import { ImportProvider } from './context/ImportContext'
@@ -130,6 +131,30 @@ export default function App() {
   const completeOnboarding = useCallback(() => {
     setOnboarding(undefined)
   }, [])
+
+  // App-wide SSE subscription that bumps the library-version cache
+  // buster on every library_updated event. Per-page subscriptions
+  // still drive their own refreshes; this one exists solely so the
+  // <img src> URLs for cover art change every time the underlying
+  // image might have. Without it, browser cache serves stale bytes
+  // for the same Subsonic id (the symptom: photo updates but doesn't
+  // appear until incognito or hard reload).
+  useEffect(() => {
+    if (!session) return
+    let cancelled = false
+    let unsubscribe: (() => void) | undefined
+    subscribeEvents(ev => {
+      if (cancelled) return
+      if (ev.type === 'library_updated') bumpLibraryVersion()
+    }).then(unsub => {
+      if (cancelled) unsub()
+      else unsubscribe = unsub
+    })
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+    }
+  }, [session])
 
   if (loading) {
     return <div className="loading-screen"><div className="spinner" /><p>Loading Bridge Music...</p></div>

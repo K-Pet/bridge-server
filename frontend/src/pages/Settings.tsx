@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { generatePairCode, getHealth, getSettings, type PairCode } from '../lib/api'
+import NavidromeCredsModal from '../components/NavidromeCredsModal'
 
 export default function Settings() {
   const [health, setHealth] = useState<string>('')
@@ -43,8 +44,49 @@ export default function Settings() {
         </section>
       )}
 
+      <NavidromeSection />
+
       <PairSection />
     </div>
+  )
+}
+
+// NavidromeSection — controls for the underlying Navidrome admin
+// account. Credentials and rotation are gated behind a fresh
+// Supabase re-auth in NavidromeCredsModal; this component just hosts
+// the entry points and the modal.
+function NavidromeSection() {
+  const [modalMode, setModalMode] = useState<'view' | 'rotate' | null>(null)
+
+  return (
+    <section className="settings-section">
+      <h3>Navidrome admin</h3>
+      <p className="setting-help">
+        Bridge bootstraps a Navidrome admin account on first run. Use these credentials
+        to sign into Navidrome directly — for example, to trigger a full library scan
+        or manage missing files.
+      </p>
+      <div className="settings-actions">
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => setModalMode('view')}
+        >
+          Show credentials
+        </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => setModalMode('rotate')}
+        >
+          Rotate password
+        </button>
+      </div>
+
+      {modalMode && (
+        <NavidromeCredsModal mode={modalMode} onClose={() => setModalMode(null)} />
+      )}
+    </section>
   )
 }
 

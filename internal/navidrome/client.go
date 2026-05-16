@@ -45,6 +45,84 @@ func NewClient(baseURL, username, password string) *Client {
 	}
 }
 
+// ChangeAdminPassword changes the password for the admin user this
+// client is authenticated as via Subsonic /rest/changePassword, then
+// updates the client's in-memory password and re-authenticates so
+// future native-API calls have a fresh JWT bound to the new
+// password. Caller is responsible for persisting the new password
+// to the credentials file (see SaveAdminCredentials) — this method
+// only handles the in-memory + remote side of the rotation.
+//
+// On any failure (Subsonic rejects the change, re-auth fails) the
+// in-memory password is left at whatever Navidrome accepted; the
+// caller must reconcile if Navidrome returned ok but re-auth then
+// failed (extremely rare, would indicate a Navidrome bug or race).
+func (c *Client) ChangeAdminPassword(ctx context.Context, newPassword string) error {
+	if newPassword == "" {
+		return fmt.Errorf("new password is empty")
+	}
+	params := c.subsonicParams()
+	params.Set("username", c.username)
+	params.Set("password", newPassword)
+	endpoint := fmt.Sprintf("%s/rest/changePassword?%s", c.baseURL, params.Encode())
+
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("change password request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("change password returned %d", resp.StatusCode)
+	}
+	var envelope struct {
+		SubsonicResponse struct {
+			Status string `json:"status"`
+			Error  *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"subsonic-response"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return fmt.Errorf("decode change password: %w", err)
+	}
+	if envelope.SubsonicResponse.Status != "ok" {
+		msg := "unknown error"
+		if envelope.SubsonicResponse.Error != nil {
+			msg = envelope.SubsonicResponse.Error.Message
+		}
+		return fmt.Errorf("navidrome rejected password change: %s", msg)
+	}
+
+	// Old JWT remains valid until Navidrome's session TTL, but new
+	// Subsonic salt/token requests now need the new password. Update
+	// in-memory and refresh the JWT in one step so the client is
+	// fully on the new credentials before returning.
+	c.password = newPassword
+	if err := c.Authenticate(ctx); err != nil {
+		return fmt.Errorf("re-authenticate with new password: %w", err)
+	}
+	return nil
+}
+
+// Credentials returns the admin username/password pair this client
+// is authenticated with. Intended for the self-host admin UI's
+// "reveal Navidrome credentials" surface, where the owner needs to
+// log into Navidrome directly to perform operations the bridge UI
+// doesn't expose (full library scans, missing-files cleanup, etc.).
+//
+// Callers MUST gate access on a fresh re-auth check — Navidrome's
+// admin user can mutate the entire library, so handing the password
+// back over an already-authenticated session would let a stale
+// cookie suffice for the most dangerous capability on the server.
+func (c *Client) Credentials() (username, password string) {
+	return c.username, c.password
+}
+
 // HostPath translates a Navidrome-relative path (e.g. "Bridge/Artist/Album/song.flac")
 // to the corresponding host filesystem path (e.g. "./data/music/Bridge/Artist/Album/song.flac").
 // The native API returns paths relative to the library root; this prepends the host music dir.

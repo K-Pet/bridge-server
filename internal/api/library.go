@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bridgemusic/bridge-server/internal/auth"
 	"github.com/bridgemusic/bridge-server/internal/config"
@@ -229,6 +230,291 @@ func handleUpdateSongTags(_ *config.Config, nd *navidrome.Client, hub *EventHub)
 	}
 }
 
+// applyTagsToSongs writes the given tag patch to each song file in
+// parallel-safe sequence and triggers exactly one Navidrome rescan at
+// the end. Returns the IDs that succeeded and the IDs that failed
+// (with the per-song write error logged at warn level so a partial
+// failure doesn't kill the whole batch).
+//
+// Used by the album- and artist-level edit endpoints, both of which
+// fan a single user patch across a song collection.
+func applyTagsToSongs(ctx context.Context, songs []navidrome.SongInfo, tags tagwriter.Tags, nd *navidrome.Client, hub *EventHub, scope string, scopeID string) (updated []string, failed []string) {
+	for _, s := range songs {
+		if s.Path == "" {
+			failed = append(failed, s.ID)
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(s.Path))
+		if !tagwriter.SupportsWrite(ext) {
+			failed = append(failed, s.ID)
+			continue
+		}
+		hostPath := nd.HostPath(s.Path)
+		if err := tagwriter.WriteTags(hostPath, tags); err != nil {
+			slog.Warn("batch tag write failed", "song", s.ID, "hostPath", hostPath, "error", err)
+			failed = append(failed, s.ID)
+			continue
+		}
+		updated = append(updated, s.ID)
+	}
+
+	if len(updated) > 0 {
+		go func() {
+			scanCtx := context.Background()
+			if err := nd.StartScan(scanCtx); err != nil {
+				slog.Error("batch tag write: scan trigger failed", "scope", scope, "id", scopeID, "error", err)
+			}
+			if hub != nil {
+				hub.Publish(Event{
+					Type: "library_updated",
+					Data: map[string]any{"updated_" + scope: scopeID, "song_count": len(updated)},
+				})
+			}
+		}()
+	}
+	_ = ctx
+	return updated, failed
+}
+
+// albumTagsRequest holds the subset of tag fields it makes sense to
+// edit at the album level. Per-track fields (title, track_number) are
+// intentionally absent — they're edited via the song endpoint. Artist
+// is also excluded; renaming the performing artist on every track of
+// an album would usually want to be an artist-scoped operation, not
+// album-scoped.
+type albumTagsRequest struct {
+	AlbumArtist *string `json:"album_artist,omitempty"`
+	Album       *string `json:"album,omitempty"`
+	Year        *int    `json:"year,omitempty"`
+	Genre       *string `json:"genre,omitempty"`
+}
+
+func (r albumTagsRequest) toTags() tagwriter.Tags {
+	return tagwriter.Tags{
+		AlbumArtist: r.AlbumArtist,
+		Album:       r.Album,
+		Year:        r.Year,
+		Genre:       r.Genre,
+	}
+}
+
+func handleUpdateAlbumTags(_ *config.Config, nd *navidrome.Client, hub *EventHub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := auth.UserID(r.Context())
+		if userID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		albumID := r.PathValue("id")
+		if albumID == "" {
+			writeJSONError(w, http.StatusBadRequest, "missing_id", "Album ID is required.")
+			return
+		}
+
+		var req albumTagsRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad_json", "Invalid JSON body: "+err.Error())
+			return
+		}
+		tags := req.toTags()
+		if !tags.HasChanges() {
+			writeJSONError(w, http.StatusBadRequest, "no_changes", "Request did not set any tag fields.")
+			return
+		}
+
+		albumSongs, err := nd.GetAlbumSongs(r.Context(), albumID)
+		if err != nil || albumSongs == nil || len(albumSongs.Songs) == 0 {
+			writeJSONError(w, http.StatusNotFound, "not_found", "Album not found or empty.")
+			return
+		}
+
+		slog.Info("updating album tags", "album", albumID, "songs", len(albumSongs.Songs), "user", userID)
+		updated, failed := applyTagsToSongs(r.Context(), albumSongs.Songs, tags, nd, hub, "album", albumID)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"updated":      true,
+			"album_id":     albumID,
+			"updated_ids":  updated,
+			"failed_ids":   failed,
+			"scanning":     len(updated) > 0,
+		})
+	}
+}
+
+// renameArtistRequest is the body shape for the artist-rename
+// endpoint. One field, deliberately: artist renames are a "rename this
+// artist everywhere" operation, not a piecemeal patch of AlbumArtist
+// vs Artist tags. The server figures out the cascade per-track.
+type renameArtistRequest struct {
+	NewName string `json:"new_name"`
+}
+
+// handleRenameArtist renames every track attributed to an artist with
+// a smart cascade that preserves featured-artist credits.
+//
+// Rules:
+//   - AlbumArtist (TPE2 / ALBUMARTIST) is rewritten on every track.
+//     This is the grouping field — Navidrome uses it to bucket albums
+//     under an artist — so it must move uniformly.
+//   - Track Artist (TPE1 / ARTIST) is rewritten only when it exactly
+//     matches the old artist name (case-insensitive, trimmed). Any
+//     value containing a feature delimiter ("Drake feat. 21 Savage",
+//     "Run-DMC & Aerosmith", "X, Y") stays untouched — that string is
+//     a *credit*, not just an artist reference, and clobbering it
+//     would corrupt the per-track credit metadata.
+//
+// Returns counts of how many tracks were fully renamed vs. left as
+// features so the UI can surface the result honestly.
+func handleRenameArtist(_ *config.Config, nd *navidrome.Client, hub *EventHub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := auth.UserID(r.Context())
+		if userID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		artistID := r.PathValue("id")
+		if artistID == "" {
+			writeJSONError(w, http.StatusBadRequest, "missing_id", "Artist ID is required.")
+			return
+		}
+
+		var req renameArtistRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad_json", "Invalid JSON body: "+err.Error())
+			return
+		}
+		newName := strings.TrimSpace(req.NewName)
+		if newName == "" {
+			writeJSONError(w, http.StatusBadRequest, "empty_name", "New artist name is required.")
+			return
+		}
+
+		songs, err := nd.GetArtistSongs(r.Context(), artistID)
+		if err != nil || len(songs) == 0 {
+			writeJSONError(w, http.StatusNotFound, "not_found", "Artist not found or has no songs.")
+			return
+		}
+
+		// Derive the old name from the first song's AlbumArtist field
+		// (falling back to Artist if AlbumArtist is empty — happens on
+		// hastily-tagged imports). All songs in this artist_id group
+		// share the same AlbumArtist by construction, so the first
+		// one is canonical.
+		oldName := strings.TrimSpace(songs[0].AlbumArtist)
+		if oldName == "" {
+			oldName = strings.TrimSpace(songs[0].Artist)
+		}
+		if oldName == "" {
+			writeJSONError(w, http.StatusInternalServerError, "no_old_name",
+				"Could not determine current artist name from Navidrome.")
+			return
+		}
+		if strings.EqualFold(oldName, newName) {
+			writeJSONError(w, http.StatusBadRequest, "no_changes",
+				"New name matches the current name.")
+			return
+		}
+
+		slog.Info("renaming artist", "artist", artistID, "old", oldName, "new", newName, "songs", len(songs), "user", userID)
+
+		// Capture any uploaded artist photo BEFORE the rename so we
+		// can carry it over to the new artist row. Navidrome's
+		// uploaded_image column is keyed by artist id, and renaming
+		// changes the id (it's a hash of the name) — without this
+		// snapshot the user would lose their custom photo on every
+		// rename.
+		var savedPhotoBytes []byte
+		if details, err := nd.GetArtistDetails(r.Context(), artistID); err == nil && details != nil && details.UploadedImage != "" {
+			if bytesData, ferr := nd.FetchCoverArt(r.Context(), "ar-"+artistID+"_0"); ferr == nil && len(bytesData) > 0 {
+				savedPhotoBytes = bytesData
+				slog.Info("rename artist: captured existing photo", "artist", artistID, "bytes", len(bytesData))
+			} else if ferr != nil {
+				slog.Warn("rename artist: failed to capture photo", "artist", artistID, "error", ferr)
+			}
+		}
+
+		var renamedTracks, preservedFeatures, failedTracks []string
+		for _, s := range songs {
+			if s.Path == "" {
+				failedTracks = append(failedTracks, s.ID)
+				continue
+			}
+			ext := strings.ToLower(filepath.Ext(s.Path))
+			if !tagwriter.SupportsWrite(ext) {
+				failedTracks = append(failedTracks, s.ID)
+				continue
+			}
+
+			tags := tagwriter.Tags{
+				AlbumArtist: &newName,
+			}
+			// Track Artist rename: only when the current value is an
+			// exact match for the old artist. Anything else is treated
+			// as a credit string (likely a feature) and preserved.
+			isExactSolo := strings.EqualFold(strings.TrimSpace(s.Artist), oldName)
+			if isExactSolo {
+				tags.Artist = &newName
+			}
+
+			hostPath := nd.HostPath(s.Path)
+			if err := tagwriter.WriteTags(hostPath, tags); err != nil {
+				slog.Warn("rename artist: write failed", "song", s.ID, "error", err)
+				failedTracks = append(failedTracks, s.ID)
+				continue
+			}
+			if isExactSolo {
+				renamedTracks = append(renamedTracks, s.ID)
+			} else {
+				preservedFeatures = append(preservedFeatures, s.ID)
+			}
+		}
+
+		// Single scan covers every file we touched. After the scan
+		// settles we look up the new artist id (the rename shifts
+		// Navidrome's hash) and re-upload the captured photo so the
+		// custom artwork survives the rename round-trip.
+		go func() {
+			ctx := context.Background()
+			if err := nd.StartScan(ctx); err != nil {
+				slog.Error("rename artist: scan trigger failed", "artist", artistID, "error", err)
+			}
+
+			if len(savedPhotoBytes) > 0 {
+				newID, err := nd.FindArtistIDByName(ctx, newName)
+				if err != nil {
+					slog.Warn("rename artist: lookup new id for photo carry-over failed", "newName", newName, "error", err)
+				} else if newID == "" {
+					slog.Warn("rename artist: new artist not found after scan, photo not carried over", "newName", newName)
+				} else if err := nd.UploadArtistImage(ctx, newID, savedPhotoBytes, "artist.jpg"); err != nil {
+					slog.Error("rename artist: photo carry-over upload failed", "newID", newID, "error", err)
+				} else {
+					slog.Info("rename artist: photo carried over", "oldID", artistID, "newID", newID, "bytes", len(savedPhotoBytes))
+				}
+			}
+
+			if hub != nil {
+				hub.Publish(Event{
+					Type: "library_updated",
+					Data: map[string]any{"renamed_artist": artistID, "new_name": newName},
+				})
+			}
+		}()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"renamed":             true,
+			"artist_id":           artistID,
+			"old_name":            oldName,
+			"new_name":            newName,
+			"renamed_track_count": len(renamedTracks),
+			"feature_preserved_count": len(preservedFeatures),
+			"failed_count":        len(failedTracks),
+			"scanning":            len(renamedTracks)+len(preservedFeatures) > 0,
+		})
+	}
+}
+
 // handleIdentifySong runs Chromaprint + AcoustID + MusicBrainz
 // against a track's audio file and returns up to N candidate matches
 // for the UI to display. Nothing is written; the user picks a
@@ -388,6 +674,23 @@ func handleUploadAlbumCover(_ *config.Config, nd *navidrome.Client, hub *EventHu
 		// only one canonical file removes the ambiguity).
 		removeCoverAlternates(albumDir, filepath.Base(finalPath))
 
+		// Bump audio file mtimes so Navidrome's incremental scan
+		// re-reads the album and re-applies CoverArtPriority. Without
+		// this the scan would notice nothing changed (cover files
+		// alone don't trigger an album re-evaluation) and the cached
+		// embedded-art coverArt id would stick. The audio bytes are
+		// untouched — only the file's modification timestamp moves.
+		touched := time.Now()
+		for _, s := range songs.Songs {
+			if s.Path == "" {
+				continue
+			}
+			audioPath := nd.HostPath(s.Path)
+			if err := os.Chtimes(audioPath, touched, touched); err != nil {
+				slog.Warn("upload album cover: touch audio file failed", "path", audioPath, "error", err)
+			}
+		}
+
 		slog.Info("upload album cover: installed", "album", albumID, "path", finalPath, "bytes", written, "user", userID)
 
 		go func() {
@@ -449,6 +752,81 @@ func removeCoverAlternates(dir, keep string) {
 			continue
 		}
 		_ = os.Remove(filepath.Join(dir, name))
+	}
+}
+
+// handleUploadArtistPhoto installs a custom artist photo via
+// Navidrome's native upload API. Unlike album cover art, Navidrome
+// does NOT consult folder-level artist.* files reliably — its
+// ArtistArtPriority is evaluated alongside external agents (LastFM,
+// MusicBrainz) and the external lookup often wins for known artists.
+// The native /api/artist/{id}/image endpoint sidesteps that priority
+// chain entirely: Navidrome stores the upload in its uploaded_image
+// column and serves it from getCoverArt immediately, no rescan
+// required.
+//
+// Wire shape is a raw PUT body with image/jpeg or image/png
+// Content-Type, matching the album-cover endpoint for consistency.
+// We repackage as multipart server-side before forwarding.
+func handleUploadArtistPhoto(_ *config.Config, nd *navidrome.Client, hub *EventHub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := auth.UserID(r.Context())
+		if userID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		artistID := r.PathValue("id")
+		if artistID == "" {
+			writeJSONError(w, http.StatusBadRequest, "missing_id", "Artist ID is required.")
+			return
+		}
+
+		ext, err := coverExtFromContentType(r.Header.Get("Content-Type"))
+		if err != nil {
+			writeJSONError(w, http.StatusUnsupportedMediaType, "unsupported_format", err.Error())
+			return
+		}
+
+		// Buffer the upload in memory. Artist photos are bounded to
+		// maxCoverBytes (10 MiB) so the in-memory cost is acceptable
+		// and we get retry semantics for free (doNative may re-build
+		// the multipart on a 401 → re-auth).
+		body, err := io.ReadAll(io.LimitReader(http.MaxBytesReader(w, r.Body, maxCoverBytes), maxCoverBytes+1))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "write_failed", "Failed to read upload: "+err.Error())
+			return
+		}
+		if len(body) == 0 {
+			writeJSONError(w, http.StatusBadRequest, "empty_body", "Request body was empty.")
+			return
+		}
+		if int64(len(body)) > maxCoverBytes {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "too_large", "Artist photo exceeds size limit.")
+			return
+		}
+
+		filename := "artist" + ext
+		if err := nd.UploadArtistImage(r.Context(), artistID, body, filename); err != nil {
+			slog.Error("upload artist photo: navidrome upload failed", "artist", artistID, "error", err)
+			writeJSONError(w, http.StatusBadGateway, "upload_failed", "Failed to upload via Navidrome: "+err.Error())
+			return
+		}
+
+		slog.Info("upload artist photo: installed via native api", "artist", artistID, "bytes", len(body), "user", userID)
+
+		if hub != nil {
+			hub.Publish(Event{
+				Type: "library_updated",
+				Data: map[string]any{"updated_artist_photo": artistID},
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"updated":   true,
+			"artist_id": artistID,
+			"bytes":     len(body),
+		})
 	}
 }
 

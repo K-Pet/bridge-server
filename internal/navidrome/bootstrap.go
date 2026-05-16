@@ -166,6 +166,21 @@ func saveCredentials(path string, creds *credentials) error {
 	return os.WriteFile(path, data, 0600)
 }
 
+// SaveAdminCredentials writes username/password to the on-disk
+// credentials file (${dataDir}/nd-credentials, 0600). Used by the
+// password-rotation flow to persist a new admin password after
+// Navidrome accepts the change. The disk write happens after
+// Navidrome has accepted the new password so a failed write doesn't
+// leave us with mismatched in-disk vs in-Navidrome state — the
+// in-memory client already holds the new password, so the running
+// process keeps working; the next process restart would re-bootstrap.
+func SaveAdminCredentials(dataDir, username, password string) error {
+	return saveCredentials(filepath.Join(dataDir, credentialsFile), &credentials{
+		Username: username,
+		Password: password,
+	})
+}
+
 // WaitReady polls Navidrome's /ping endpoint until it responds 200 or the timeout expires.
 func WaitReady(ctx context.Context, baseURL string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

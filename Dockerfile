@@ -82,7 +82,9 @@ ENV ND_MUSICFOLDER=/data/music \
     ND_DATAFOLDER=/data/navidrome \
     ND_CONFIGFILE=/data/navidrome/navidrome.toml \
     ND_ADDRESS=127.0.0.1 \
-    ND_PORT=4533
+    ND_PORT=4533 \
+    ND_COVERARTPRIORITY="cover.*,folder.*,front.*,embedded" \
+    ND_ARTISTARTPRIORITY="artist.*,album/artist.*,external"
 
 # Bridge server config — operational defaults (paths, ports).
 ENV BRIDGE_PORT=8888 \

@@ -59,6 +59,10 @@ func NewRouter(
 	authed.HandleFunc("GET /api/albums/{id}/zip", handleAlbumZip(cfg))
 	authed.HandleFunc("GET /api/entitlements", handleEntitlements(cfg))
 	authed.HandleFunc("GET /api/settings", handleGetSettings(cfg))
+	if nd != nil {
+		authed.HandleFunc("GET /api/settings/navidrome-creds", handleGetNavidromeCreds(cfg, nd))
+		authed.HandleFunc("POST /api/settings/navidrome-creds/rotate", handleRotateNavidromePassword(cfg, nd))
+	}
 	authed.HandleFunc("POST /api/pair/generate", handleGeneratePairCode())
 
 	// Library management
@@ -66,8 +70,11 @@ func NewRouter(
 		authed.HandleFunc("DELETE /api/library/songs/{id}", handleDeleteSong(cfg, nd, queue, hub))
 		authed.HandleFunc("DELETE /api/library/albums/{id}", handleDeleteAlbum(cfg, nd, queue, hub))
 		authed.HandleFunc("PUT /api/library/songs/{id}", handleUpdateSongTags(cfg, nd, hub))
+		authed.HandleFunc("PUT /api/library/albums/{id}", handleUpdateAlbumTags(cfg, nd, hub))
+		authed.HandleFunc("PUT /api/library/artists/{id}", handleRenameArtist(cfg, nd, hub))
 		authed.HandleFunc("POST /api/library/songs/{id}/identify", handleIdentifySong(cfg, nd))
 		authed.HandleFunc("PUT /api/library/albums/{id}/cover", handleUploadAlbumCover(cfg, nd, hub))
+		authed.HandleFunc("PUT /api/library/artists/{id}/photo", handleUploadArtistPhoto(cfg, nd, hub))
 	}
 
 	// Library import (user-owned music upload). Manager exists even
