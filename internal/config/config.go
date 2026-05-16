@@ -107,6 +107,13 @@ type Config struct {
 	// project doesn't enforce captcha (e.g. local dev), in which case
 	// the frontend skips the captcha step.
 	HCaptchaSiteKey string
+
+	// AcoustIDKey is the per-application key for the AcoustID web
+	// service, used by the "identify with MusicBrainz" feature in the
+	// metadata editor. Register a free key at https://acoustid.org/
+	// new-application. When empty, the identify endpoint returns 503
+	// and the frontend hides the identify button.
+	AcoustIDKey string
 }
 
 func Load() (*Config, error) {
@@ -132,6 +139,7 @@ func Load() (*Config, error) {
 		DevEmail:           envStr("BRIDGE_DEV_EMAIL", "test@bridge.music"),
 		DevPassword:        envStr("BRIDGE_DEV_PASSWORD", "testpass123"),
 		HCaptchaSiteKey:    envStr("BRIDGE_HCAPTCHA_SITE_KEY", BridgeHCaptchaSiteKey),
+		AcoustIDKey:        envStr("BRIDGE_ACOUSTID_KEY", ""),
 	}
 
 	// Auto-mint per-server identity if not handed in via env. Stays

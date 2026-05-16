@@ -66,6 +66,7 @@ func NewRouter(
 		authed.HandleFunc("DELETE /api/library/songs/{id}", handleDeleteSong(cfg, nd, queue, hub))
 		authed.HandleFunc("DELETE /api/library/albums/{id}", handleDeleteAlbum(cfg, nd, queue, hub))
 		authed.HandleFunc("PUT /api/library/songs/{id}", handleUpdateSongTags(cfg, nd, hub))
+		authed.HandleFunc("POST /api/library/songs/{id}/identify", handleIdentifySong(cfg, nd))
 	}
 
 	// Library import (user-owned music upload). Manager exists even

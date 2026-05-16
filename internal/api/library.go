@@ -11,6 +11,7 @@ import (
 
 	"github.com/bridgemusic/bridge-server/internal/auth"
 	"github.com/bridgemusic/bridge-server/internal/config"
+	"github.com/bridgemusic/bridge-server/internal/library/autotag"
 	"github.com/bridgemusic/bridge-server/internal/library/tagwriter"
 	"github.com/bridgemusic/bridge-server/internal/navidrome"
 	"github.com/bridgemusic/bridge-server/internal/store"
@@ -211,6 +212,80 @@ func handleUpdateSongTags(_ *config.Config, nd *navidrome.Client, hub *EventHub)
 			"updated":  true,
 			"song_id":  songID,
 			"scanning": true,
+		})
+	}
+}
+
+// handleIdentifySong runs Chromaprint + AcoustID + MusicBrainz
+// against a track's audio file and returns up to N candidate matches
+// for the UI to display. Nothing is written; the user picks a
+// candidate and the existing PUT /api/library/songs/{id} endpoint
+// applies the chosen values.
+//
+// Returns 503 when fpcalc isn't installed or when the operator hasn't
+// set BRIDGE_ACOUSTID_KEY — both are environmental concerns and the
+// frontend uses the structured error code to hide the affordance
+// rather than retry.
+func handleIdentifySong(cfg *config.Config, nd *navidrome.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := auth.UserID(r.Context())
+		if userID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		songID := r.PathValue("id")
+		if songID == "" {
+			writeJSONError(w, http.StatusBadRequest, "missing_id", "Song ID is required.")
+			return
+		}
+
+		if cfg.AcoustIDKey == "" {
+			writeJSONError(w, http.StatusServiceUnavailable, "acoustid_not_configured",
+				"Auto-identification is not configured on this server (BRIDGE_ACOUSTID_KEY unset).")
+			return
+		}
+
+		song, err := nd.GetSong(r.Context(), songID)
+		if err != nil {
+			slog.Warn("identify song: lookup failed", "song", songID, "error", err)
+			writeJSONError(w, http.StatusNotFound, "not_found", "Song not found in library.")
+			return
+		}
+		if song.Path == "" {
+			writeJSONError(w, http.StatusInternalServerError, "no_path", "Navidrome did not return a file path for this song.")
+			return
+		}
+
+		hostPath := nd.HostPath(song.Path)
+		slog.Info("identifying song", "song", songID, "hostPath", hostPath, "user", userID)
+
+		client := autotag.New(cfg.AcoustIDKey, "bridge-server/1.0 (+https://bridgemusic.app)")
+		candidates, err := client.Identify(r.Context(), hostPath, 5)
+		if err != nil {
+			if errors.Is(err, autotag.ErrFingerprinterMissing) {
+				writeJSONError(w, http.StatusServiceUnavailable, "fpcalc_missing",
+					"The fpcalc binary (libchromaprint-tools) is not installed on the server.")
+				return
+			}
+			if errors.Is(err, autotag.ErrNoMatches) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"song_id":    songID,
+					"candidates": []autotag.Candidate{},
+				})
+				return
+			}
+			slog.Error("identify song: failed", "song", songID, "error", err)
+			writeJSONError(w, http.StatusInternalServerError, "identify_failed",
+				"Failed to identify track: "+err.Error())
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"song_id":    songID,
+			"candidates": candidates,
 		})
 	}
 }

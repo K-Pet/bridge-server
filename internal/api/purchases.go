@@ -686,11 +686,12 @@ func fetchTrackIDsForAlbums(ctx context.Context, client *http.Client, cfg *confi
 func handleConfig(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		payload := map[string]any{
-			"supabase_url":      cfg.SupabaseURL,
-			"supabase_anon_key": cfg.SupabaseAnonKey,
-			"dev_mode":          cfg.DevMode,
-			"marketplace_url":   cfg.MarketplaceURL,
-			"hcaptcha_site_key": cfg.HCaptchaSiteKey,
+			"supabase_url":       cfg.SupabaseURL,
+			"supabase_anon_key":  cfg.SupabaseAnonKey,
+			"dev_mode":           cfg.DevMode,
+			"marketplace_url":    cfg.MarketplaceURL,
+			"hcaptcha_site_key":  cfg.HCaptchaSiteKey,
+			"acoustid_available": cfg.AcoustIDKey != "",
 		}
 		if cfg.DevMode && cfg.DevEmail != "" {
 			payload["dev_email"] = cfg.DevEmail
