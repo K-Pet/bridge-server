@@ -3,11 +3,15 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"github.com/bridgemusic/bridge-server/internal/auth"
 	"github.com/bridgemusic/bridge-server/internal/config"
+	"github.com/bridgemusic/bridge-server/internal/library/tagwriter"
 	"github.com/bridgemusic/bridge-server/internal/navidrome"
 	"github.com/bridgemusic/bridge-server/internal/store"
 )
@@ -84,6 +88,127 @@ func handleDeleteSong(cfg *config.Config, nd *navidrome.Client, queue *store.Que
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"deleted":  true,
+			"song_id":  songID,
+			"scanning": true,
+		})
+	}
+}
+
+// songTagsRequest is the JSON body of PUT /api/library/songs/{id}.
+// All fields use pointers so callers can send a partial patch — only
+// non-nil fields are written to the file. An empty string clears a
+// field; a missing key leaves it alone.
+type songTagsRequest struct {
+	Title       *string `json:"title,omitempty"`
+	Artist      *string `json:"artist,omitempty"`
+	AlbumArtist *string `json:"album_artist,omitempty"`
+	Album       *string `json:"album,omitempty"`
+	Year        *int    `json:"year,omitempty"`
+	TrackNumber *int    `json:"track_number,omitempty"`
+	DiscNumber  *int    `json:"disc_number,omitempty"`
+	Genre       *string `json:"genre,omitempty"`
+}
+
+func (r songTagsRequest) toTags() tagwriter.Tags {
+	return tagwriter.Tags{
+		Title:       r.Title,
+		Artist:      r.Artist,
+		AlbumArtist: r.AlbumArtist,
+		Album:       r.Album,
+		Year:        r.Year,
+		TrackNumber: r.TrackNumber,
+		DiscNumber:  r.DiscNumber,
+		Genre:       r.Genre,
+	}
+}
+
+// handleUpdateSongTags writes edited metadata to the audio file on
+// disk and then triggers a Navidrome rescan. Navidrome owns the
+// database view of tags but treats files as the source of truth, so
+// the only way to persist a user edit is to mutate the file and let
+// Navidrome reindex it.
+//
+// Flow:
+//  1. Resolve the file path from Navidrome's native API
+//  2. Reject unsupported formats up front (e.g. m4a, ogg) with 415
+//  3. Write tags to the file (atomic via the tagwriter package)
+//  4. Trigger a Navidrome scan in the background
+//  5. Publish a library_updated SSE event so the SPA refreshes
+func handleUpdateSongTags(_ *config.Config, nd *navidrome.Client, hub *EventHub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := auth.UserID(r.Context())
+		if userID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		songID := r.PathValue("id")
+		if songID == "" {
+			writeJSONError(w, http.StatusBadRequest, "missing_id", "Song ID is required.")
+			return
+		}
+
+		var req songTagsRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad_json", "Invalid JSON body: "+err.Error())
+			return
+		}
+		tags := req.toTags()
+		if !tags.HasChanges() {
+			writeJSONError(w, http.StatusBadRequest, "no_changes", "Request did not set any tag fields.")
+			return
+		}
+
+		song, err := nd.GetSong(r.Context(), songID)
+		if err != nil {
+			slog.Warn("update song tags: lookup failed", "song", songID, "error", err)
+			writeJSONError(w, http.StatusNotFound, "not_found", "Song not found in library.")
+			return
+		}
+		if song.Path == "" {
+			writeJSONError(w, http.StatusInternalServerError, "no_path", "Navidrome did not return a file path for this song.")
+			return
+		}
+
+		ext := strings.ToLower(filepath.Ext(song.Path))
+		if !tagwriter.SupportsWrite(ext) {
+			writeJSONError(w, http.StatusUnsupportedMediaType, "unsupported_format",
+				"Tag editing is not yet supported for "+ext+" files.")
+			return
+		}
+
+		hostPath := nd.HostPath(song.Path)
+		slog.Info("updating song tags", "song", songID, "hostPath", hostPath, "user", userID)
+
+		if err := tagwriter.WriteTags(hostPath, tags); err != nil {
+			if errors.Is(err, tagwriter.ErrUnsupportedFormat) {
+				writeJSONError(w, http.StatusUnsupportedMediaType, "unsupported_format", err.Error())
+				return
+			}
+			slog.Error("update song tags: write failed", "song", songID, "hostPath", hostPath, "error", err)
+			writeJSONError(w, http.StatusInternalServerError, "write_failed",
+				"Failed to write tags to file: "+err.Error())
+			return
+		}
+
+		// Scan in the background so the request returns quickly. The
+		// SSE event tells the SPA when the new metadata is queryable.
+		go func() {
+			ctx := context.Background()
+			if err := nd.StartScan(ctx); err != nil {
+				slog.Error("update song tags: scan trigger failed", "song", songID, "error", err)
+			}
+			if hub != nil {
+				hub.Publish(Event{
+					Type: "library_updated",
+					Data: map[string]any{"updated_song": songID},
+				})
+			}
+		}()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"updated":  true,
 			"song_id":  songID,
 			"scanning": true,
 		})
