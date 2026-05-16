@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { getArtist, coverArtUrl, findArtistByName, SubsonicNotFoundError, type Artist, type Album } from '../lib/subsonic'
-import { deleteAlbum, subscribeEvents, uploadArtistPhoto, type RenameArtistResult } from '../lib/api'
+import { deleteAlbum, subscribeEvents, uploadArtistPhoto, type RenameArtistAck, type RenameArtistSummary } from '../lib/api'
 import EditArtistModal from '../components/EditArtistModal'
 
 export default function ArtistDetail() {
@@ -13,10 +13,17 @@ export default function ArtistDetail() {
   const [error, setError] = useState('')
   const [deleting, setDeleting] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
+  // renameInFlight is set when the server has accepted a rename but
+  // the SSE completion event hasn't arrived yet. Shows a "Renaming
+  // N tracks…" pending toast so the user has feedback during the
+  // async cascade (which can take 30+ seconds on slow storage).
+  const [renameInFlight, setRenameInFlight] = useState<RenameArtistAck | null>(null)
   // renameSummary surfaces the server's cascade report ("Renamed 47
   // tracks, kept 8 features intact") so the user understands what
-  // happened. Auto-dismisses after a few seconds.
-  const [renameSummary, setRenameSummary] = useState<RenameArtistResult | null>(null)
+  // happened. Populated from the library_updated SSE event with
+  // operation:"artist_rename" and complete:true. Auto-dismisses
+  // after a few seconds.
+  const [renameSummary, setRenameSummary] = useState<RenameArtistSummary | null>(null)
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   // localPhotoURL is a blob URL of the just-uploaded image. Same role
   // as AlbumDetail.localCoverURL — shows the new photo immediately so
@@ -84,13 +91,21 @@ export default function ArtistDetail() {
   }, [id])
 
   // Refresh when Navidrome reports a library update so artist
-  // renames propagate without a manual reload.
+  // renames propagate without a manual reload. The same event also
+  // carries the cascade summary when an async artist_rename completes;
+  // we promote the in-flight pending toast to the full summary then.
   useEffect(() => {
     let cancelled = false
     let unsubscribe: (() => void) | undefined
     subscribeEvents(ev => {
       if (cancelled) return
-      if (ev.type === 'library_updated') refresh()
+      if (ev.type !== 'library_updated') return
+      const d = ev.data as Partial<RenameArtistSummary> | undefined
+      if (d && d.operation === 'artist_rename' && d.complete && d.renamed_artist === id) {
+        setRenameSummary(d as RenameArtistSummary)
+        setRenameInFlight(null)
+      }
+      refresh()
     }).then(unsub => {
       if (cancelled) unsub()
       else unsubscribe = unsub
@@ -168,6 +183,22 @@ export default function ArtistDetail() {
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         Back
       </button>
+
+      {renameInFlight && !renameSummary && (
+        <div className="rename-summary" role="status" aria-live="polite">
+          <div className="rename-summary-icon">
+            <span className="spinner-sm" />
+          </div>
+          <div className="rename-summary-body">
+            <div className="rename-summary-title">
+              Renaming <strong>{renameInFlight.old_name}</strong> → <strong>{renameInFlight.new_name}</strong>
+            </div>
+            <div className="rename-summary-detail">
+              Rewriting tags on {renameInFlight.songs_queued} {renameInFlight.songs_queued === 1 ? 'track' : 'tracks'}… this may take a minute on low-end hardware.
+            </div>
+          </div>
+        </div>
+      )}
 
       {renameSummary && (
         <div className="rename-summary" role="status">
@@ -293,10 +324,14 @@ export default function ArtistDetail() {
         <EditArtistModal
           artist={artist}
           onClose={() => setEditing(false)}
-          onSaved={(newName, result) => {
+          onSaved={(newName, ack) => {
             pendingNameRef.current = newName
-            setRenameSummary(result)
-            refresh()
+            setRenameInFlight(ack)
+            // Don't refresh() yet — the server only ACK'd the queue
+            // submission, the actual tag rewrites haven't run. The
+            // library_updated SSE event will both refresh the page
+            // and promote renameInFlight into renameSummary once the
+            // goroutine finishes.
           }}
         />
       )}

@@ -265,9 +265,18 @@ func applyTagsToSongs(ctx context.Context, songs []navidrome.SongInfo, tags tagw
 				slog.Error("batch tag write: scan trigger failed", "scope", scope, "id", scopeID, "error", err)
 			}
 			if hub != nil {
+				// "complete:true" + per-scope counts let the SPA replace
+				// a "Saving…" toast with a "Saved N of M tracks" summary
+				// after the rescan settles.
 				hub.Publish(Event{
 					Type: "library_updated",
-					Data: map[string]any{"updated_" + scope: scopeID, "song_count": len(updated)},
+					Data: map[string]any{
+						"operation":           scope + "_edit",
+						"complete":            true,
+						"updated_" + scope:    scopeID,
+						"updated_track_count": len(updated),
+						"failed_count":        len(failed),
+					},
 				})
 			}
 		}()
@@ -329,15 +338,21 @@ func handleUpdateAlbumTags(_ *config.Config, nd *navidrome.Client, hub *EventHub
 		}
 
 		slog.Info("updating album tags", "album", albumID, "songs", len(albumSongs.Songs), "user", userID)
-		updated, failed := applyTagsToSongs(r.Context(), albumSongs.Songs, tags, nd, hub, "album", albumID)
+
+		// Async fan-out, same rationale as handleRenameArtist: SD-card
+		// I/O on low-end hardware can exceed Cloudflare's edge
+		// timeout. The 202 lands fast; completion arrives via SSE.
+		songsCopy := albumSongs.Songs
+		go func() {
+			applyTagsToSongs(context.Background(), songsCopy, tags, nd, hub, "album", albumID)
+		}()
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"updated":      true,
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"accepted":     true,
 			"album_id":     albumID,
-			"updated_ids":  updated,
-			"failed_ids":   failed,
-			"scanning":     len(updated) > 0,
+			"songs_queued": len(albumSongs.Songs),
 		})
 	}
 }
@@ -424,6 +439,12 @@ func handleRenameArtist(_ *config.Config, nd *navidrome.Client, hub *EventHub) h
 		// changes the id (it's a hash of the name) — without this
 		// snapshot the user would lose their custom photo on every
 		// rename.
+		//
+		// Done synchronously (before the goroutine spawns) so we read
+		// the photo while the OLD artist row still exists. Capping
+		// FetchCoverArt with the request context keeps a slow
+		// Navidrome from holding the response forever; the rest of
+		// the rename runs in the background regardless.
 		var savedPhotoBytes []byte
 		if details, err := nd.GetArtistDetails(r.Context(), artistID); err == nil && details != nil && details.UploadedImage != "" {
 			if bytesData, ferr := nd.FetchCoverArt(r.Context(), "ar-"+artistID+"_0"); ferr == nil && len(bytesData) > 0 {
@@ -434,83 +455,116 @@ func handleRenameArtist(_ *config.Config, nd *navidrome.Client, hub *EventHub) h
 			}
 		}
 
-		var renamedTracks, preservedFeatures, failedTracks []string
-		for _, s := range songs {
-			if s.Path == "" {
-				failedTracks = append(failedTracks, s.ID)
-				continue
-			}
-			ext := strings.ToLower(filepath.Ext(s.Path))
-			if !tagwriter.SupportsWrite(ext) {
-				failedTracks = append(failedTracks, s.ID)
-				continue
-			}
-
-			tags := tagwriter.Tags{
-				AlbumArtist: &newName,
-			}
-			// Track Artist rename: only when the current value is an
-			// exact match for the old artist. Anything else is treated
-			// as a credit string (likely a feature) and preserved.
-			isExactSolo := strings.EqualFold(strings.TrimSpace(s.Artist), oldName)
-			if isExactSolo {
-				tags.Artist = &newName
-			}
-
-			hostPath := nd.HostPath(s.Path)
-			if err := tagwriter.WriteTags(hostPath, tags); err != nil {
-				slog.Warn("rename artist: write failed", "song", s.ID, "error", err)
-				failedTracks = append(failedTracks, s.ID)
-				continue
-			}
-			if isExactSolo {
-				renamedTracks = append(renamedTracks, s.ID)
-			} else {
-				preservedFeatures = append(preservedFeatures, s.ID)
-			}
-		}
-
-		// Single scan covers every file we touched. After the scan
-		// settles we look up the new artist id (the rename shifts
-		// Navidrome's hash) and re-upload the captured photo so the
-		// custom artwork survives the rename round-trip.
+		// Tag writes + scan + photo restore run async. On low-end
+		// hardware (e.g. Pi Zero 2W writing dozens of FLACs to an SD
+		// card) the sync version of this could push past Cloudflare's
+		// 100 s edge timeout and 504 even though Navidrome is fine.
+		// The client gets a 202 immediately and tracks completion via
+		// the library_updated SSE event published when the goroutine
+		// finishes — that event now carries the cascade counts so the
+		// UI can show "Renamed 47, kept 8 features intact" without
+		// the original PUT having to wait for the work.
 		go func() {
 			ctx := context.Background()
+			var renamedTracks, preservedFeatures, failedTracks []string
+
+			for _, s := range songs {
+				if s.Path == "" {
+					failedTracks = append(failedTracks, s.ID)
+					continue
+				}
+				ext := strings.ToLower(filepath.Ext(s.Path))
+				if !tagwriter.SupportsWrite(ext) {
+					failedTracks = append(failedTracks, s.ID)
+					continue
+				}
+
+				tags := tagwriter.Tags{
+					AlbumArtist: &newName,
+				}
+				// Track Artist rename: only when the current value is
+				// an exact match for the old artist. Anything else is
+				// treated as a credit string (likely a feature) and
+				// preserved.
+				isExactSolo := strings.EqualFold(strings.TrimSpace(s.Artist), oldName)
+				if isExactSolo {
+					tags.Artist = &newName
+				}
+
+				hostPath := nd.HostPath(s.Path)
+				if err := tagwriter.WriteTags(hostPath, tags); err != nil {
+					slog.Warn("rename artist: write failed", "song", s.ID, "error", err)
+					failedTracks = append(failedTracks, s.ID)
+					continue
+				}
+				if isExactSolo {
+					renamedTracks = append(renamedTracks, s.ID)
+				} else {
+					preservedFeatures = append(preservedFeatures, s.ID)
+				}
+			}
+
 			if err := nd.StartScan(ctx); err != nil {
 				slog.Error("rename artist: scan trigger failed", "artist", artistID, "error", err)
 			}
 
+			// Restore the captured photo against the new artist id
+			// once the rescan has produced it. FindArtistIDByName uses
+			// search3 internally; the rescan should have indexed the
+			// new name before publish.
+			var newArtistID string
 			if len(savedPhotoBytes) > 0 {
-				newID, err := nd.FindArtistIDByName(ctx, newName)
+				id, err := nd.FindArtistIDByName(ctx, newName)
 				if err != nil {
 					slog.Warn("rename artist: lookup new id for photo carry-over failed", "newName", newName, "error", err)
-				} else if newID == "" {
+				} else if id == "" {
 					slog.Warn("rename artist: new artist not found after scan, photo not carried over", "newName", newName)
-				} else if err := nd.UploadArtistImage(ctx, newID, savedPhotoBytes, "artist.jpg"); err != nil {
-					slog.Error("rename artist: photo carry-over upload failed", "newID", newID, "error", err)
+				} else if err := nd.UploadArtistImage(ctx, id, savedPhotoBytes, "artist.jpg"); err != nil {
+					slog.Error("rename artist: photo carry-over upload failed", "newID", id, "error", err)
 				} else {
-					slog.Info("rename artist: photo carried over", "oldID", artistID, "newID", newID, "bytes", len(savedPhotoBytes))
+					slog.Info("rename artist: photo carried over", "oldID", artistID, "newID", id, "bytes", len(savedPhotoBytes))
+					newArtistID = id
 				}
 			}
+
+			slog.Info("rename artist: complete",
+				"artist", artistID,
+				"renamed", len(renamedTracks),
+				"preserved_features", len(preservedFeatures),
+				"failed", len(failedTracks),
+			)
 
 			if hub != nil {
 				hub.Publish(Event{
 					Type: "library_updated",
-					Data: map[string]any{"renamed_artist": artistID, "new_name": newName},
+					Data: map[string]any{
+						// Marker that this event represents a rename
+						// completion, distinct from generic library
+						// touches. Frontend matches on these fields to
+						// surface the cascade summary toast.
+						"operation":               "artist_rename",
+						"complete":                true,
+						"renamed_artist":          artistID,
+						"new_artist_id":           newArtistID,
+						"old_name":                oldName,
+						"new_name":                newName,
+						"renamed_track_count":     len(renamedTracks),
+						"feature_preserved_count": len(preservedFeatures),
+						"failed_count":            len(failedTracks),
+					},
 				})
 			}
 		}()
 
+		// 202 Accepted: work has been queued, watch SSE for completion.
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"renamed":             true,
-			"artist_id":           artistID,
-			"old_name":            oldName,
-			"new_name":            newName,
-			"renamed_track_count": len(renamedTracks),
-			"feature_preserved_count": len(preservedFeatures),
-			"failed_count":        len(failedTracks),
-			"scanning":            len(renamedTracks)+len(preservedFeatures) > 0,
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"accepted":     true,
+			"artist_id":    artistID,
+			"old_name":     oldName,
+			"new_name":     newName,
+			"songs_queued": len(songs),
 		})
 	}
 }

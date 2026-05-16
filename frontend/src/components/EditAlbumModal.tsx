@@ -67,14 +67,11 @@ export default function EditAlbumModal({ album, onClose, onSaved }: Props) {
     setSaving(true)
     setError('')
     try {
-      const res = await updateAlbumTags(album.id, patch)
-      if (res.failed_ids?.length > 0) {
-        // Partial success is worth flagging — the user can decide
-        // whether to retry. Don't close on partial failure.
-        setError(`Updated ${res.updated_ids.length} of ${res.updated_ids.length + res.failed_ids.length} tracks. ${res.failed_ids.length} failed.`)
-        setSaving(false)
-        return
-      }
+      // Server queues the work and returns 202 immediately —
+      // per-track failures (if any) come back later via the
+      // library_updated SSE event. We close the modal on accept and
+      // trust the parent to refresh when the rescan settles.
+      await updateAlbumTags(album.id, patch)
       onSaved(patch)
       onClose()
     } catch (err) {

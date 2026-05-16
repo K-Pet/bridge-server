@@ -158,37 +158,55 @@ export interface AlbumTagsUpdate {
   genre?: string
 }
 
-export async function updateAlbumTags(albumId: string, tags: AlbumTagsUpdate) {
-  return apiFetch<{
-    updated: boolean
-    album_id: string
-    updated_ids: string[]
-    failed_ids: string[]
-    scanning: boolean
-  }>(
+// AlbumEditAck is what the server returns immediately after the PUT —
+// the real work (tag writes, scan, SSE) runs async so the response
+// can come back inside a sane HTTP timeout even on slow hardware
+// (Pi Zero 2W writing many FLAC tracks to SD card was hitting
+// Cloudflare's 100 s edge timeout). Per-track results land in a
+// follow-up library_updated SSE event marked complete:true.
+export interface AlbumEditAck {
+  accepted: boolean
+  album_id: string
+  songs_queued: number
+}
+
+export async function updateAlbumTags(albumId: string, tags: AlbumTagsUpdate): Promise<AlbumEditAck> {
+  return apiFetch<AlbumEditAck>(
     `/api/library/albums/${encodeURIComponent(albumId)}`,
     { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tags) }
   )
 }
 
-// RenameArtistResult mirrors the server response. The server does a
-// smart cascade: AlbumArtist is rewritten universally, but Track
-// Artist is rewritten only on tracks where it exactly matches the old
-// artist name (no features). The counts let the UI surface "Renamed
-// 47 tracks; left 8 features intact."
-export interface RenameArtistResult {
-  renamed: boolean
+// RenameArtistAck is the immediate response from PUT /api/library/
+// artists/{id}. The actual tag rewriting happens in a goroutine
+// because on low-end hardware (e.g. Pi Zero 2W writing many FLAC
+// tracks to SD) the sync version routinely exceeded Cloudflare's
+// 100 s edge timeout. The cascade counts arrive later via SSE.
+export interface RenameArtistAck {
+  accepted: boolean
   artist_id: string
+  old_name: string
+  new_name: string
+  songs_queued: number
+}
+
+// RenameArtistSummary is the SSE payload shape published when the
+// rename goroutine finishes. The frontend recognizes it via
+// `operation === "artist_rename"` and `complete === true`.
+export interface RenameArtistSummary {
+  operation: 'artist_rename'
+  complete: true
+  renamed_artist: string
+  new_artist_id?: string
   old_name: string
   new_name: string
   renamed_track_count: number
   feature_preserved_count: number
   failed_count: number
-  scanning: boolean
 }
 
-export async function renameArtist(artistId: string, newName: string) {
-  return apiFetch<RenameArtistResult>(
+export async function renameArtist(artistId: string, newName: string): Promise<RenameArtistAck> {
+  return apiFetch<RenameArtistAck>(
     `/api/library/artists/${encodeURIComponent(artistId)}`,
     {
       method: 'PUT',

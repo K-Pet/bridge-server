@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
-import { renameArtist, type RenameArtistResult } from '../lib/api'
+import { renameArtist, type RenameArtistAck } from '../lib/api'
 import type { Artist } from '../lib/subsonic'
 
 interface Props {
   artist: Artist
   onClose: () => void
-  // onSaved fires after the PUT returns; the second arg surfaces the
-  // server's cascade summary (e.g. "renamed 47, kept 8 features") so
-  // the parent can navigate AND show a confirmation toast.
-  onSaved: (newName: string, result: RenameArtistResult) => void
+  // onSaved fires when the server has *accepted* the rename. The
+  // actual cascade arrives later via SSE — the parent shows a
+  // "renaming…" toast immediately and replaces it with the cascade
+  // summary on completion.
+  onSaved: (newName: string, ack: RenameArtistAck) => void
 }
 
 export default function EditArtistModal({ artist, onClose, onSaved }: Props) {
@@ -33,8 +34,8 @@ export default function EditArtistModal({ artist, onClose, onSaved }: Props) {
     setSaving(true)
     setError('')
     try {
-      const res = await renameArtist(artist.id, trimmed)
-      onSaved(trimmed, res)
+      const ack = await renameArtist(artist.id, trimmed)
+      onSaved(trimmed, ack)
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
