@@ -193,7 +193,7 @@ docker compose -f docker-compose.dev.yml up
 # Terminal 2: Go backend
 mkdir -p data/bridge data/music
 BRIDGE_DEV=true \
-BRIDGE_PORT=8888 \
+BRIDGE_PORT=8088 \
 BRIDGE_DATA=./data/bridge \
 BRIDGE_MUSIC_DIR=./data/music \
 BRIDGE_ND_URL=http://localhost:4533 \
@@ -281,7 +281,7 @@ frontend/
 │       ├── Library.tsx       browse via proxied Subsonic API
 │       ├── Purchases.tsx     history + redeliver
 │       └── Settings.tsx      server status + config
-├── vite.config.ts            dev proxy to :8888
+├── vite.config.ts            dev proxy to :8088
 └── index.html
 ```
 
