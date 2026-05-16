@@ -127,6 +127,27 @@ export async function deleteSong(songId: string) {
   )
 }
 
+// SongTagsUpdate uses PATCH semantics — only fields included in the
+// request body are written. To leave a field unchanged, omit the key;
+// to clear a field, send an empty string (or 0 for numeric fields).
+export interface SongTagsUpdate {
+  title?: string
+  artist?: string
+  album_artist?: string
+  album?: string
+  year?: number
+  track_number?: number
+  disc_number?: number
+  genre?: string
+}
+
+export async function updateSongTags(songId: string, tags: SongTagsUpdate) {
+  return apiFetch<{ updated: boolean; song_id: string; scanning: boolean }>(
+    `/api/library/songs/${encodeURIComponent(songId)}`,
+    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tags) }
+  )
+}
+
 export async function deleteAlbum(albumId: string) {
   return apiFetch<{ deleted: boolean; album_id: string; song_count: number; scanning: boolean }>(
     `/api/library/albums/${encodeURIComponent(albumId)}`,

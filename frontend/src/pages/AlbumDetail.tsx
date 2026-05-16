@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { getAlbum, coverArtUrl, formatDuration, formatDurationLong, type Album, type Song } from '../lib/subsonic'
-import { deleteSong, deleteAlbum } from '../lib/api'
+import { deleteSong, deleteAlbum, subscribeEvents } from '../lib/api'
 import { usePlayer } from '../context/PlayerContext'
+import EditSongModal from '../components/EditSongModal'
 
 export default function AlbumDetail() {
   const { id } = useParams<{ id: string }>()
@@ -13,7 +14,21 @@ export default function AlbumDetail() {
   const [error, setError] = useState('')
   const [deletingAlbum, setDeletingAlbum] = useState(false)
   const [deletingSong, setDeletingSong] = useState<string | null>(null)
+  const [editingSong, setEditingSong] = useState<Song | null>(null)
   const { playSong, playAlbum, currentSong, isPlaying } = usePlayer()
+
+  // refresh re-fetches the album so freshly-written tags show up after
+  // Navidrome finishes its rescan. Used both by the edit flow's
+  // onSaved callback (optimistic refresh) and the SSE listener below.
+  function refresh() {
+    if (!id) return
+    getAlbum(id)
+      .then(({ album, songs }) => {
+        setAlbum(album)
+        setSongs(songs)
+      })
+      .catch(e => setError(e.message))
+  }
 
   useEffect(() => {
     if (!id) return
@@ -25,6 +40,29 @@ export default function AlbumDetail() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
+  }, [id])
+
+  // Subscribe to library_updated SSE events so the album view picks
+  // up tag edits as soon as Navidrome finishes rescanning. We
+  // refresh on any library_updated regardless of payload — the
+  // re-fetch is cheap and avoids missing updates from sibling songs.
+  useEffect(() => {
+    let cancelled = false
+    let unsubscribe: (() => void) | undefined
+    subscribeEvents(ev => {
+      if (cancelled) return
+      if (ev.type === 'library_updated') refresh()
+    }).then(unsub => {
+      if (cancelled) unsub()
+      else unsubscribe = unsub
+    })
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+    }
+    // refresh closes over `id`; we only need to resubscribe when the
+    // album id changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
   async function handleDeleteAlbum() {
@@ -52,6 +90,11 @@ export default function AlbumDetail() {
     } finally {
       setDeletingSong(null)
     }
+  }
+
+  function handleEditSong(e: React.MouseEvent, song: Song) {
+    e.stopPropagation()
+    setEditingSong(song)
   }
 
   if (loading) return <div className="loading">Loading album...</div>
@@ -153,6 +196,15 @@ export default function AlbumDetail() {
                       </div>
                       <span className="song-duration">{formatDuration(song.duration)}</span>
                       <span
+                        className="btn-edit-sm"
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => handleEditSong(e, song)}
+                        title={`Edit ${song.title}`}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /></svg>
+                      </span>
+                      <span
                         className="btn-delete-sm"
                         role="button"
                         tabIndex={0}
@@ -192,6 +244,15 @@ export default function AlbumDetail() {
                   </div>
                   <span className="song-duration">{formatDuration(song.duration)}</span>
                   <span
+                    className="btn-edit-sm"
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => handleEditSong(e, song)}
+                    title={`Edit ${song.title}`}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /></svg>
+                  </span>
+                  <span
                     className="btn-delete-sm"
                     role="button"
                     tabIndex={0}
@@ -208,6 +269,22 @@ export default function AlbumDetail() {
               )
             })}
       </div>
+
+      {editingSong && (
+        <EditSongModal
+          song={editingSong}
+          onClose={() => setEditingSong(null)}
+          onSaved={() => {
+            // The server kicks off a Navidrome rescan in the
+            // background. The SSE library_updated handler will
+            // re-fetch when that completes, but call refresh()
+            // here too so the table reorders quickly if the user
+            // changed track number — Subsonic returns updated tags
+            // as soon as the scan is finished.
+            refresh()
+          }}
+        />
+      )}
     </div>
   )
 }
