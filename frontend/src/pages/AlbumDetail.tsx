@@ -57,7 +57,13 @@ export default function AlbumDetail() {
       // Navidrome catches up. Without this guard the recovery search
       // runs against the old (current screen) name and finds nothing.
       const pending = pendingNameRef.current
-      if (pending && result.album.name.trim().toLowerCase() === pending.album.trim().toLowerCase()) {
+      // Null-safe compare: Subsonic can return null for name on
+      // "Unknown" rows, in which case calling .trim() directly would
+      // throw. Coalesce both sides so the rename guard degrades to
+      // a no-match instead of crashing the page.
+      const got = (result.album.name ?? '').trim().toLowerCase()
+      const want = pending ? (pending.album ?? '').trim().toLowerCase() : ''
+      if (pending && got === want) {
         pendingNameRef.current = null
       }
     } catch (e) {

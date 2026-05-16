@@ -47,7 +47,10 @@ export default function ArtistDetail() {
       // we're guarding against (post-save refresh returns stale data
       // before the rescan completes).
       const pending = pendingNameRef.current
-      if (pending && result.artist.name.trim().toLowerCase() === pending.trim().toLowerCase()) {
+      // Null-safe compare — see matching comment in AlbumDetail.refresh.
+      const got = (result.artist.name ?? '').trim().toLowerCase()
+      const want = (pending ?? '').trim().toLowerCase()
+      if (pending && got === want) {
         pendingNameRef.current = null
       }
     } catch (e) {

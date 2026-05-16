@@ -332,13 +332,24 @@ export interface RotateResult {
 // password to mint a fresh JWT. Returns the new access token. The
 // password never touches bridge-server — it goes directly to Supabase
 // over HTTPS.
-async function reauthenticateAndGetToken(password: string): Promise<string> {
+//
+// captchaToken is required when the Supabase project has captcha
+// enforcement enabled (the Login flow already handles this for
+// initial sign-in; re-auth has to clear the same bar or Supabase
+// returns 'captcha_failed'). The caller passes the hCaptcha token
+// it just collected; we forward it inside the same options bag
+// signInWithPassword uses on the login path.
+async function reauthenticateAndGetToken(password: string, captchaToken?: string): Promise<string> {
   const supabase = getSupabase()
   if (!supabase) throw new Error('Supabase not configured')
   const { data: userData } = await supabase.auth.getUser()
   const email = userData.user?.email
   if (!email) throw new Error('No active session')
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+    options: { captchaToken: captchaToken ?? undefined },
+  })
   if (error) throw new Error(error.message)
   const token = data.session?.access_token
   if (!token) throw new Error('Re-authentication did not return a session')
@@ -349,16 +360,19 @@ async function reauthenticateAndGetToken(password: string): Promise<string> {
 // iat-freshness check) we call the endpoint with the existing
 // session token — saves the developer from re-typing their test
 // password to exercise the flow. Production callers always pass it.
-export async function getNavidromeCreds(password?: string): Promise<NavidromeCreds> {
+//
+// captchaToken is forwarded to the Supabase re-auth call. Required
+// in prod when the project enforces captcha; safe to omit otherwise.
+export async function getNavidromeCreds(password?: string, captchaToken?: string): Promise<NavidromeCreds> {
   const init = password !== undefined
-    ? { token: await reauthenticateAndGetToken(password) }
+    ? { token: await reauthenticateAndGetToken(password, captchaToken) }
     : undefined
   return apiFetch<NavidromeCreds>('/api/settings/navidrome-creds', init)
 }
 
-export async function rotateNavidromePassword(password?: string): Promise<RotateResult> {
+export async function rotateNavidromePassword(password?: string, captchaToken?: string): Promise<RotateResult> {
   const init = password !== undefined
-    ? { method: 'POST' as const, token: await reauthenticateAndGetToken(password) }
+    ? { method: 'POST' as const, token: await reauthenticateAndGetToken(password, captchaToken) }
     : { method: 'POST' as const }
   return apiFetch<RotateResult>('/api/settings/navidrome-creds/rotate', init)
 }

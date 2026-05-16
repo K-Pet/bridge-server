@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import HCaptcha from '@hcaptcha/react-hcaptcha'
 import {
   getNavidromeCreds,
   rotateNavidromePassword,
@@ -32,6 +33,13 @@ export default function NavidromeCredsModal({ mode, onClose }: Props) {
   const [creds, setCreds] = useState<NavidromeCreds | null>(null)
   const [rotated, setRotated] = useState<RotateResult | null>(null)
   const [revealPassword, setRevealPassword] = useState(false)
+  // hCaptcha state — mirrors Login.tsx's pattern. Required when the
+  // Supabase project enforces captcha (prod). Token is single-use and
+  // gets reset after any submission so a retry is forced to solve a
+  // fresh challenge — preserves the brute-force resistance captcha is
+  // there to provide.
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const captchaRef = useRef<HCaptcha | null>(null)
 
   // Dev mode skips the re-auth prompt — the server doesn't enforce
   // the iat freshness check when BRIDGE_DEV=true, so requiring the
@@ -39,10 +47,21 @@ export default function NavidromeCredsModal({ mode, onClose }: Props) {
   // without adding security. The dev banner makes the difference from
   // production visible at a glance.
   let isDev = false
+  let captchaSiteKey = ''
   try {
-    isDev = !!getConfig().dev_mode
+    const cfg = getConfig()
+    isDev = !!cfg.dev_mode
+    captchaSiteKey = cfg.hcaptcha_site_key || ''
   } catch {
     isDev = false
+  }
+  // Captcha is shown only when the project requires it AND we'd be
+  // calling signInWithPassword (i.e. not the dev shortcut path).
+  const captchaRequired = !!captchaSiteKey && !isDev
+
+  function resetCaptcha() {
+    captchaRef.current?.resetCaptcha()
+    setCaptchaToken(null)
   }
 
   useEffect(() => {
@@ -79,15 +98,20 @@ export default function NavidromeCredsModal({ mode, onClose }: Props) {
     // In prod, password is required. In dev (skipped prompt), the
     // rotate flow gets here via the confirm button with no password.
     if (!isDev && !password) return
+    if (captchaRequired && !captchaToken) {
+      setError('Please complete the captcha verification.')
+      return
+    }
     setSubmitting(true)
     setError('')
     try {
       const pw = isDev ? undefined : password
+      const ct = isDev ? undefined : (captchaToken ?? undefined)
       if (mode === 'view') {
-        const c = await getNavidromeCreds(pw)
+        const c = await getNavidromeCreds(pw, ct)
         setCreds(c)
       } else {
-        const r = await rotateNavidromePassword(pw)
+        const r = await rotateNavidromePassword(pw, ct)
         setRotated(r)
       }
       // Clear the password from React state immediately after use.
@@ -96,6 +120,9 @@ export default function NavidromeCredsModal({ mode, onClose }: Props) {
       setPassword('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication failed')
+      // Captcha tokens are single-use; reset so the user is forced to
+      // solve a fresh challenge on retry. Matches the Login flow.
+      resetCaptcha()
     } finally {
       setSubmitting(false)
     }
@@ -150,6 +177,19 @@ export default function NavidromeCredsModal({ mode, onClose }: Props) {
                   </label>
                 )}
 
+                {captchaRequired && (
+                  <div style={{ display: 'flex', justifyContent: 'center', minHeight: 78 }}>
+                    <HCaptcha
+                      ref={captchaRef}
+                      sitekey={captchaSiteKey}
+                      onVerify={(token) => setCaptchaToken(token)}
+                      onExpire={() => setCaptchaToken(null)}
+                      onError={() => setCaptchaToken(null)}
+                      theme="dark"
+                    />
+                  </div>
+                )}
+
                 {error && <div className="modal-error">{error}</div>}
 
                 <footer className="modal-actions">
@@ -159,7 +199,11 @@ export default function NavidromeCredsModal({ mode, onClose }: Props) {
                   <button
                     type="submit"
                     className="btn-primary"
-                    disabled={(!isDev && !password) || submitting}
+                    disabled={
+                      (!isDev && !password) ||
+                      (captchaRequired && !captchaToken) ||
+                      submitting
+                    }
                   >
                     {submitting
                       ? (mode === 'view' ? 'Loading…' : 'Rotating…')
@@ -267,7 +311,7 @@ function CredField({
     <div className="cred-field">
       <span className="cred-label">{label}</span>
       <div className="cred-value-row">
-        <code className="cred-value">{mask ? '•'.repeat(Math.min(value.length, 24)) : value}</code>
+        <code className="cred-value">{mask ? '•'.repeat(Math.min((value ?? '').length, 24)) : (value ?? '')}</code>
         {onToggleMask && (
           <button type="button" className="cred-action" onClick={onToggleMask} title={mask ? 'Show' : 'Hide'}>
             {mask ? 'Show' : 'Hide'}

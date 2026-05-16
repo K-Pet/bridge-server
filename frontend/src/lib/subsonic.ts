@@ -185,6 +185,15 @@ export async function search(query: string): Promise<SearchResult> {
   return result ?? {}
 }
 
+// norm normalizes a (possibly null/undefined) string to a comparable
+// lowercase form. Subsonic occasionally returns null for fields on
+// "[Unknown Artist]" / "[Unknown Album]" rows; calling .trim() on
+// those throws "Cannot read properties of null (reading 'trim')".
+// Centralizing the coalesce makes every comparator below null-safe.
+function norm(s: string | null | undefined): string {
+  return (s ?? '').trim().toLowerCase()
+}
+
 // findAlbumByName looks up an album by its (possibly just-renamed)
 // title and artist. Used by the rename recovery path: after an album
 // edit changes Navidrome's hash-based id, search3 lets us find the
@@ -197,17 +206,17 @@ export async function findAlbumByName(name: string, artist: string): Promise<Alb
   if (!name) return null
   const results = await search(name)
   const candidates = results.album ?? []
-  const lowerName = name.trim().toLowerCase()
-  const lowerArtist = artist.trim().toLowerCase()
+  const lowerName = norm(name)
+  const lowerArtist = norm(artist)
   for (const a of candidates) {
-    if (a.name.trim().toLowerCase() === lowerName && a.artist.trim().toLowerCase() === lowerArtist) {
+    if (norm(a.name) === lowerName && norm(a.artist) === lowerArtist) {
       return a
     }
   }
   // Fall back to name-only match — artist might have shifted too in
   // the same edit (album_artist change cascades).
   for (const a of candidates) {
-    if (a.name.trim().toLowerCase() === lowerName) {
+    if (norm(a.name) === lowerName) {
       return a
     }
   }
@@ -219,9 +228,9 @@ export async function findArtistByName(name: string): Promise<Artist | null> {
   if (!name) return null
   const results = await search(name)
   const candidates = results.artist ?? []
-  const lowerName = name.trim().toLowerCase()
+  const lowerName = norm(name)
   for (const a of candidates) {
-    if (a.name.trim().toLowerCase() === lowerName) return a
+    if (norm(a.name) === lowerName) return a
   }
   return null
 }
