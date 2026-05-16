@@ -66,7 +66,7 @@ RUN case "${TARGETARCH}" in \
  && tar -C / -Jxpf /tmp/s6-arch.tar.xz \
  && rm /tmp/s6-*.tar.xz
 
-RUN apk add --no-cache ca-certificates ffmpeg tzdata wget
+RUN apk add --no-cache ca-certificates ffmpeg tzdata wget chromaprint
 
 # Navidrome binary
 COPY --from=navidrome /app/navidrome /app/navidrome
