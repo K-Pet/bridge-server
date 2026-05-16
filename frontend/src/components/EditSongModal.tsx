@@ -5,7 +5,8 @@ import type { Song } from '../lib/subsonic'
 
 // Formats the server's tagwriter package can currently mutate. Keep
 // in sync with internal/library/tagwriter/tagwriter.go::SupportsWrite.
-const EDITABLE_SUFFIXES = new Set(['mp3', 'flac'])
+// MP3/FLAC use Go-native writers; the rest go through ffmpeg -c copy.
+const EDITABLE_SUFFIXES = new Set(['mp3', 'flac', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'alac'])
 
 interface Props {
   song: Song

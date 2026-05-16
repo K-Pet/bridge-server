@@ -62,10 +62,9 @@ func WriteTags(hostPath string, tags Tags) error {
 		return writeMP3(hostPath, tags)
 	case ".flac":
 		return writeFLAC(hostPath, tags)
-	case ".m4a", ".aac", ".alac":
-		return writeM4A(hostPath, tags)
-	case ".ogg", ".oga", ".opus":
-		return writeOGG(hostPath, tags)
+	case ".m4a", ".aac", ".alac",
+		".ogg", ".oga", ".opus":
+		return writeViaFFmpeg(hostPath, tags)
 	default:
 		return fmt.Errorf("%w: %s", ErrUnsupportedFormat, ext)
 	}
@@ -75,9 +74,14 @@ func WriteTags(hostPath string, tags Tags) error {
 // implementation (not a stub). The handler uses this for upfront
 // validation so the UI can disable the edit affordance for files
 // we can't actually modify.
+//
+// MP3 and FLAC use format-specific Go libraries; OGG, Opus, and the
+// MP4 family route through ffmpeg with -c copy (no re-encoding).
 func SupportsWrite(ext string) bool {
 	switch strings.ToLower(ext) {
-	case ".mp3", ".flac":
+	case ".mp3", ".flac",
+		".ogg", ".oga", ".opus",
+		".m4a", ".aac", ".alac":
 		return true
 	default:
 		return false

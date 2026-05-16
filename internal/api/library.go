@@ -186,6 +186,11 @@ func handleUpdateSongTags(_ *config.Config, nd *navidrome.Client, hub *EventHub)
 				writeJSONError(w, http.StatusUnsupportedMediaType, "unsupported_format", err.Error())
 				return
 			}
+			if errors.Is(err, tagwriter.ErrFFmpegMissing) {
+				writeJSONError(w, http.StatusServiceUnavailable, "ffmpeg_missing",
+					"The ffmpeg binary is not installed on the server (required for OGG/Opus/M4A edits).")
+				return
+			}
 			slog.Error("update song tags: write failed", "song", songID, "hostPath", hostPath, "error", err)
 			writeJSONError(w, http.StatusInternalServerError, "write_failed",
 				"Failed to write tags to file: "+err.Error())
