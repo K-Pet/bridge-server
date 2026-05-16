@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { getAlbum, coverArtUrl, formatDuration, formatDurationLong, type Album, type Song } from '../lib/subsonic'
-import { deleteSong, deleteAlbum, subscribeEvents } from '../lib/api'
+import { deleteSong, deleteAlbum, subscribeEvents, uploadAlbumCover } from '../lib/api'
 import { usePlayer } from '../context/PlayerContext'
 import EditSongModal from '../components/EditSongModal'
 
@@ -15,6 +15,12 @@ export default function AlbumDetail() {
   const [deletingAlbum, setDeletingAlbum] = useState(false)
   const [deletingSong, setDeletingSong] = useState<string | null>(null)
   const [editingSong, setEditingSong] = useState<Song | null>(null)
+  const [uploadingCover, setUploadingCover] = useState(false)
+  // coverNonce busts the <img> cache after a successful upload so the
+  // user sees the new image without a hard reload. Subsonic returns
+  // the same coverArt id even when the underlying file changes.
+  const [coverNonce, setCoverNonce] = useState(0)
+  const coverInputRef = useRef<HTMLInputElement | null>(null)
   const { playSong, playAlbum, currentSong, isPlaying } = usePlayer()
 
   // refresh re-fetches the album so freshly-written tags show up after
@@ -97,6 +103,32 @@ export default function AlbumDetail() {
     setEditingSong(song)
   }
 
+  async function handleCoverFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    // Reset the input so picking the same file twice still triggers
+    // onChange — otherwise re-selecting an identical filename is a no-op.
+    e.target.value = ''
+    if (!file || !id) return
+    if (!['image/jpeg', 'image/png'].includes(file.type)) {
+      alert('Cover must be a JPEG or PNG image.')
+      return
+    }
+    setUploadingCover(true)
+    try {
+      await uploadAlbumCover(id, file)
+      // Bump the nonce so the cover-art URL changes — Subsonic's
+      // coverArt id is stable, so without this the cached image
+      // stays on screen until the user hard-refreshes.
+      setCoverNonce(n => n + 1)
+      // The server kicked off a Navidrome rescan; the SSE
+      // library_updated event will re-fetch the album for us.
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Cover upload failed')
+    } finally {
+      setUploadingCover(false)
+    }
+  }
+
   if (loading) return <div className="loading">Loading album...</div>
   if (error) return <div className="error-page">Error: {error}</div>
   if (!album) return <div className="error-page">Album not found</div>
@@ -115,15 +147,41 @@ export default function AlbumDetail() {
       </button>
 
       <div className="album-hero">
-        <div className="album-hero-cover">
+        <button
+          type="button"
+          className="album-hero-cover album-hero-cover-editable"
+          onClick={() => coverInputRef.current?.click()}
+          disabled={uploadingCover}
+          title="Click to change cover"
+        >
           {album.coverArt ? (
-            <img src={coverArtUrl(album.coverArt, 400)} alt={album.name} />
+            <img
+              src={`${coverArtUrl(album.coverArt, 400)}&v=${coverNonce}`}
+              alt={album.name}
+            />
           ) : (
             <div className="cover-placeholder large">
               <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" /></svg>
             </div>
           )}
-        </div>
+          <span className="album-hero-cover-overlay" aria-hidden="true">
+            {uploadingCover ? (
+              <span className="spinner-sm" />
+            ) : (
+              <>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7h4l2-3h6l2 3h4v13H3z" /><circle cx="12" cy="13" r="4" /></svg>
+                <span>Change cover</span>
+              </>
+            )}
+          </span>
+        </button>
+        <input
+          ref={coverInputRef}
+          type="file"
+          accept="image/jpeg,image/png"
+          style={{ display: 'none' }}
+          onChange={handleCoverFile}
+        />
         <div className="album-hero-info">
           <span className="detail-label">Album</span>
           <h1>{album.name}</h1>

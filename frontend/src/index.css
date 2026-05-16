@@ -2623,3 +2623,44 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Editable album cover — wraps the cover image in a button so a click
+   anywhere on the artwork opens the file picker. The overlay fades
+   in on hover/focus and shows a spinner during upload. */
+.album-hero-cover-editable {
+  position: relative;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.album-hero-cover-editable:disabled {
+  cursor: wait;
+}
+
+.album-hero-cover-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.album-hero-cover-editable:hover .album-hero-cover-overlay,
+.album-hero-cover-editable:focus-visible .album-hero-cover-overlay,
+.album-hero-cover-editable:disabled .album-hero-cover-overlay {
+  opacity: 1;
+}

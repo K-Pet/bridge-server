@@ -172,6 +172,27 @@ export async function identifySong(songId: string) {
   )
 }
 
+// uploadAlbumCover replaces the album's folder-level cover image.
+// The server expects a raw PUT body (no multipart wrapper) with a
+// Content-Type of image/jpeg or image/png. File.type is exactly the
+// MIME the browser inferred from the selected file's extension, so
+// passing it through is safe — the server rejects anything else.
+//
+// Uses fetch() directly rather than apiFetch because we send a binary
+// body with a non-JSON Content-Type; apiFetch is JSON-shaped.
+export async function uploadAlbumCover(albumId: string, file: File) {
+  const hdrs = await authHeaders()
+  const res = await fetch(`/api/library/albums/${encodeURIComponent(albumId)}/cover`, {
+    method: 'PUT',
+    headers: { ...hdrs, 'Content-Type': file.type },
+    body: file,
+  })
+  if (!res.ok) {
+    throw new Error(`API ${res.status}: ${await res.text()}`)
+  }
+  return res.json() as Promise<{ updated: boolean; album_id: string; bytes: number; scanning: boolean }>
+}
+
 export async function deleteAlbum(albumId: string) {
   return apiFetch<{ deleted: boolean; album_id: string; song_count: number; scanning: boolean }>(
     `/api/library/albums/${encodeURIComponent(albumId)}`,
