@@ -68,6 +68,10 @@ local_resource(
         # so use host.docker.internal for reachability.
         "BRIDGE_EXTERNAL_URL=" + env.get("BRIDGE_EXTERNAL_URL", "http://host.docker.internal:8088"),
         "BRIDGE_LABEL=" + env.get("BRIDGE_LABEL", "Local-Dev-Server"),
+        # AcoustID key for the "Identify with MusicBrainz" feature in
+        # the metadata editor. Optional — when unset, the identify
+        # endpoint returns 503 and the UI hides the button.
+        "BRIDGE_ACOUSTID_KEY=" + env.get("BRIDGE_ACOUSTID_KEY", ""),
         "go", "run", "./cmd/bridge-server",
     ]),
     deps=[
