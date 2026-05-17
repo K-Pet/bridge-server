@@ -799,18 +799,23 @@ func handleGetNavidromeCreds(cfg *config.Config, nd *navidrome.Client) http.Hand
 }
 
 // handleRotateNavidromePassword generates a fresh random Navidrome
-// admin password, applies it via Subsonic changePassword, persists it
-// to ${BRIDGE_DATA}/nd-credentials, and returns the new password
+// admin password, applies it through the navidrome client's
+// transactional ChangeAdminPassword, and returns the new password
 // once. Same fresh-auth gate as the reveal endpoint — rotating the
-// password is even more sensitive (it can lock out other clients
-// that have the old password cached).
+// password is even more sensitive (it can lock out other Subsonic
+// clients that have the old password cached).
 //
-// Order matters: Navidrome accepts first, then we write to disk. If
-// the disk write fails, the in-memory client already holds the new
-// password so the running process keeps working; the next restart
-// would bootstrap a fresh admin (which fails because Navidrome
-// already has users) and surface a clear recovery message. The
-// failure mode is observable, not silent.
+// Transactional ordering (enforced by ChangeAdminPassword):
+//  1. PUT new password to Navidrome.
+//  2. Verify by authenticating with the new password (proves the PUT
+//     wasn't a silent no-op and Navidrome's user record is healthy).
+//  3. Persist to disk via the callback below (atomic rename + .prev
+//     backup).
+//  4. Commit the new password into the in-memory client.
+//
+// Any failure rolls Navidrome back to the old password. The client's
+// in-memory and on-disk state stay in sync; restart is safe in every
+// non-catastrophic case.
 func handleRotateNavidromePassword(cfg *config.Config, nd *navidrome.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if auth.UserID(r.Context()) == "" {
@@ -855,19 +860,19 @@ func handleRotateNavidromePassword(cfg *config.Config, nd *navidrome.Client) htt
 		}
 
 		username, _ := nd.Credentials()
-		if err := nd.ChangeAdminPassword(r.Context(), newPassword); err != nil {
-			slog.Error("rotate navidrome password: change failed", "error", err)
-			writeJSONError(w, http.StatusBadGateway, "rotate_failed",
-				"Failed to change password in Navidrome: "+err.Error())
-			return
+		// The persist callback runs *after* Navidrome accepts and
+		// verifies the new password, but *before* the in-memory
+		// client commits. If this returns an error, ChangeAdminPassword
+		// rolls Navidrome back to the old password — so on the wire
+		// the rotation either fully succeeded or fully reverted.
+		persist := func(pw string) error {
+			return navidrome.SaveAdminCredentials(cfg.DataDir, username, pw)
 		}
-
-		if err := navidrome.SaveAdminCredentials(cfg.DataDir, username, newPassword); err != nil {
-			// Navidrome already accepted the new password. Disk write
-			// failed — log loudly so the operator notices the drift,
-			// but don't fail the request (the client has the new
-			// password and we returned it; restart would re-bootstrap).
-			slog.Error("rotate navidrome password: disk persistence failed (in-memory creds still valid)", "error", err)
+		if err := nd.ChangeAdminPassword(r.Context(), newPassword, persist); err != nil {
+			slog.Error("rotate navidrome password failed", "error", err)
+			writeJSONError(w, http.StatusBadGateway, "rotate_failed",
+				"Failed to rotate Navidrome password: "+err.Error())
+			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")

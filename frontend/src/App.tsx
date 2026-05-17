@@ -87,15 +87,23 @@ export default function App() {
 
       if (!cancelled) setLoading(false)
 
-      // Keep session in sync on refreshes / sign-out
+      // Keep session in sync on refreshes / sign-out. Only re-check
+      // onboarding when the user actually changes (sign-out + sign-in
+      // as someone else). A token refresh, or a re-auth as the same
+      // user — like the NavidromeCredsModal's signInWithPassword to
+      // mint a fresh JWT — must not flip onboarding back to null:
+      // that would briefly render the global loading screen, unmount
+      // Settings (and the modal), and look exactly like a page reload.
       const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
-        setSession(newSession)
-        // Re-check onboarding if session changes (e.g. sign-out + re-sign-in)
-        if (newSession) {
-          setOnboarding(null) // trigger re-check
-        } else {
-          setOnboarding(undefined) // no session, skip
-        }
+        setSession(prev => {
+          const sameUser = prev?.user.id && newSession?.user.id && prev.user.id === newSession.user.id
+          if (!newSession) {
+            setOnboarding(undefined) // signed out
+          } else if (!sameUser) {
+            setOnboarding(null) // different user — re-check
+          }
+          return newSession
+        })
       })
 
       return () => subscription.unsubscribe()

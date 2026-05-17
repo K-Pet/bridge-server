@@ -24,7 +24,14 @@ type credentials struct {
 
 const (
 	credentialsFile = "nd-credentials"
-	adminUsername   = "bridge-admin"
+	// previousCredentialsSuffix is the on-disk shadow file of the
+	// last-known-good credentials. Written by atomic saves before a
+	// new rotation lands, and used by Bootstrap as a recovery
+	// fallback when the primary file fails to authenticate (typical
+	// cause: a rotation that succeeded in Navidrome but whose disk
+	// persistence finished partially, e.g. host crash mid-write).
+	previousCredentialsSuffix = ".prev"
+	adminUsername             = "bridge-admin"
 )
 
 // Bootstrap ensures we have working Navidrome admin credentials.
@@ -51,7 +58,7 @@ func Bootstrap(ctx context.Context, cfg *config.Config) (*Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create admin: %w", err)
 		}
-		if err := saveCredentials(credPath, creds); err != nil {
+		if err := atomicSaveCredentials(credPath, creds); err != nil {
 			return nil, fmt.Errorf("failed to save credentials: %w", err)
 		}
 		freshlyMinted = true
@@ -69,9 +76,31 @@ func Bootstrap(ctx context.Context, cfg *config.Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to authenticate with freshly-created admin: %w", authErr)
 	}
 
-	slog.Warn("stored navidrome credentials failed to authenticate, attempting re-create",
+	slog.Warn("stored navidrome credentials failed to authenticate, trying .prev fallback",
 		"error", authErr, "user", creds.Username)
 
+	// Recovery step 1: try the previous-credentials shadow file. This
+	// covers the case where a rotation persisted to disk but the host
+	// crashed before the new password actually landed in Navidrome, or
+	// where the primary file got truncated by a partial write that
+	// pre-dated atomicSaveCredentials.
+	if prevCreds, prevLoadErr := loadCredentials(credPath + previousCredentialsSuffix); prevLoadErr == nil {
+		if prevClient, prevAuthErr := authenticatedClient(ctx, cfg, prevCreds); prevAuthErr == nil {
+			slog.Warn("recovered using nd-credentials.prev — promoting back to primary",
+				"user", prevCreds.Username)
+			if err := atomicSaveCredentials(credPath, prevCreds); err != nil {
+				// Recovered in memory; couldn't promote .prev back to
+				// primary. Log and continue — the running process is
+				// fine, but the next restart will hit the same fallback.
+				slog.Error("failed to promote .prev credentials to primary", "error", err)
+			}
+			return prevClient, nil
+		} else {
+			slog.Warn(".prev credentials also failed to authenticate", "error", prevAuthErr)
+		}
+	}
+
+	slog.Warn("attempting createAdmin recovery (only works if navidrome has no users)")
 	newCreds, recoverErr := createAdmin(ctx, cfg)
 	if recoverErr != nil {
 		return nil, fmt.Errorf(
@@ -79,7 +108,7 @@ func Bootstrap(ctx context.Context, cfg *config.Config) (*Client, error) {
 			authErr, recoverErr,
 		)
 	}
-	if err := saveCredentials(credPath, newCreds); err != nil {
+	if err := atomicSaveCredentials(credPath, newCreds); err != nil {
 		return nil, fmt.Errorf("failed to save recovered credentials: %w", err)
 	}
 
@@ -166,16 +195,78 @@ func saveCredentials(path string, creds *credentials) error {
 	return os.WriteFile(path, data, 0600)
 }
 
+// atomicSaveCredentials writes new credentials, keeping the previous
+// file as ${path}.prev for recovery, with an atomic rename for the
+// primary so partial writes can't leave the primary truncated:
+//
+//  1. Write the new content to ${path}.new with fsync.
+//  2. Snapshot the existing primary to ${path}.prev (best-effort —
+//     a missing or unreadable primary is not fatal; the .new is the
+//     authoritative source of truth from this point on).
+//  3. Atomically rename ${path}.new → ${path}.
+//
+// POSIX rename is atomic within a filesystem, so step 3 guarantees
+// the primary file is either the old contents or the new contents,
+// never a partial write. The .prev shadow lets Bootstrap recover from
+// the narrow window where step 1 succeeded but a host crash or disk
+// fault interrupted step 3.
+func atomicSaveCredentials(path string, creds *credentials) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(creds)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".new"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+
+	// Best-effort: snapshot the existing primary to .prev so we have
+	// a known-good fallback if a subsequent rotation goes wrong. Don't
+	// fail the save if the snapshot can't be taken — the primary swap
+	// below is still atomic and still safer than the old in-place
+	// write.
+	if existing, readErr := os.ReadFile(path); readErr == nil {
+		_ = os.WriteFile(path+previousCredentialsSuffix, existing, 0600)
+	}
+
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
 // SaveAdminCredentials writes username/password to the on-disk
-// credentials file (${dataDir}/nd-credentials, 0600). Used by the
-// password-rotation flow to persist a new admin password after
-// Navidrome accepts the change. The disk write happens after
-// Navidrome has accepted the new password so a failed write doesn't
-// leave us with mismatched in-disk vs in-Navidrome state — the
-// in-memory client already holds the new password, so the running
-// process keeps working; the next process restart would re-bootstrap.
+// credentials file (${dataDir}/nd-credentials, 0600) atomically, with
+// the previous file preserved as ${dataDir}/nd-credentials.prev for
+// recovery. Used by the password-rotation flow to persist a new
+// admin password.
+//
+// Ordering note for the rotation flow: this is invoked *after*
+// Navidrome has accepted the new password and *before* the in-memory
+// client commits to the new password. A failure here triggers a
+// Navidrome rollback in ChangeAdminPassword, so a partial state is
+// not externally observable.
 func SaveAdminCredentials(dataDir, username, password string) error {
-	return saveCredentials(filepath.Join(dataDir, credentialsFile), &credentials{
+	return atomicSaveCredentials(filepath.Join(dataDir, credentialsFile), &credentials{
 		Username: username,
 		Password: password,
 	})

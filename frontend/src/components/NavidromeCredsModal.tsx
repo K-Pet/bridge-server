@@ -153,7 +153,15 @@ export default function NavidromeCredsModal({ mode, onClose }: Props) {
               <div className="modal-warning">
                 {mode === 'view'
                   ? 'Re-enter your password to view the Navidrome admin credentials. This account can modify your entire library.'
-                  : 'Re-enter your password to rotate the Navidrome admin password. Any other app using the old password will need to be updated.'}
+                  : 'Re-enter your password to rotate the Navidrome admin password.'}
+              </div>
+            )}
+
+            {mode === 'rotate' && (
+              <div className="modal-warning" style={{ background: 'rgba(245, 158, 11, 0.08)', borderColor: 'rgba(245, 158, 11, 0.3)', color: '#f59e0b' }}>
+                <strong>Heads up:</strong> any Subsonic apps connected directly to Navidrome
+                (DSub, Tempo, play:Sub, etc.) will need to be reconfigured with the new password.
+                Bridge itself updates automatically.
               </div>
             )}
 
@@ -269,15 +277,31 @@ function CredentialsView({
 }
 
 function RotatedView({ result, onClose }: { result: RotateResult; onClose: () => void }) {
+  // Track whether the user has copied the password so we can keep
+  // them from dismissing the modal prematurely. The new password is
+  // only shown once; bridge-server has already discarded it after
+  // returning, so there is no way to retrieve it again short of
+  // rotating again.
+  const [copied, setCopied] = useState(false)
   return (
     <div className="modal-form">
       <div className="modal-warning" style={{ background: 'rgba(34, 197, 94, 0.08)', borderColor: 'rgba(34, 197, 94, 0.3)', color: '#22c55e' }}>
-        Password rotated. Copy it now — for security reasons we won't show it again. You can always rotate again if needed.
+        <strong>Password rotated.</strong> Copy it now — for security reasons we won't show it again.
+        You'll need it to sign into Navidrome's UI directly, and to reconfigure any Subsonic apps
+        you have connected to Navidrome.
       </div>
       <CredField label="Username" value={result.username} />
-      <CredField label="New password" value={result.password} mask={false} />
+      <CredField label="New password" value={result.password} mask={false} onCopied={() => setCopied(true)} />
       <footer className="modal-actions">
-        <button type="button" className="btn-primary" onClick={onClose}>I've saved it</button>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={onClose}
+          disabled={!copied}
+          title={copied ? '' : 'Copy the password before closing — it will not be shown again.'}
+        >
+          {copied ? "I've saved it" : 'Copy the password first'}
+        </button>
       </footer>
     </div>
   )
@@ -288,11 +312,13 @@ function CredField({
   value,
   mask,
   onToggleMask,
+  onCopied,
 }: {
   label: string
   value: string
   mask?: boolean
   onToggleMask?: () => void
+  onCopied?: () => void
 }) {
   const [copied, setCopied] = useState(false)
 
@@ -300,6 +326,7 @@ function CredField({
     try {
       await navigator.clipboard.writeText(value)
       setCopied(true)
+      onCopied?.()
       window.setTimeout(() => setCopied(false), 1500)
     } catch {
       // Clipboard write can fail in non-secure contexts; user can
