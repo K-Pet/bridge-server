@@ -34,6 +34,15 @@ var (
 	// EXPO_PUBLIC_EMBED_ORIGINS allowlist must include this bridge-
 	// server's public origin for the postMessage session handoff.
 	BridgeMarketplaceURL = "https://market.bykobejean.com"
+	// BridgeAcoustIDKey: per-application AcoustID web-service key,
+	// used by the "identify with MusicBrainz" surface in the metadata
+	// editor. AcoustID app keys are public identifiers (not secrets);
+	// the free tier's 3 req/sec quota is per-key and is shared across
+	// every install of an image built with the same baked-in default.
+	// Identify is a manual, user-initiated action — sharing the quota
+	// is fine in practice. Operators who want their own quota set
+	// BRIDGE_ACOUSTID_KEY at runtime; runtime env wins.
+	BridgeAcoustIDKey = ""
 )
 
 type Config struct {
@@ -139,7 +148,7 @@ func Load() (*Config, error) {
 		DevEmail:           envStr("BRIDGE_DEV_EMAIL", "test@bridge.music"),
 		DevPassword:        envStr("BRIDGE_DEV_PASSWORD", "testpass123"),
 		HCaptchaSiteKey:    envStr("BRIDGE_HCAPTCHA_SITE_KEY", BridgeHCaptchaSiteKey),
-		AcoustIDKey:        envStr("BRIDGE_ACOUSTID_KEY", ""),
+		AcoustIDKey:        envStr("BRIDGE_ACOUSTID_KEY", BridgeAcoustIDKey),
 	}
 
 	// Auto-mint per-server identity if not handed in via env. Stays

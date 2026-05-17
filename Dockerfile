@@ -20,14 +20,16 @@ RUN go mod download
 COPY . .
 COPY --from=frontend /web/dist ./web/dist
 
-# Bridge Music Supabase project + hCaptcha site key — baked into the
-# binary at link time (NOT exported to ENV) so end-users running this
-# image in Portainer / Docker don't see them listed as configurable
-# knobs alongside their real config. None of these three values is a
-# secret; they're public identifiers that already ship in the iOS app
-# bundle and the Marketplace web client. Operators forking the image
-# for a different Supabase project pass --build-arg at build time;
-# runtime `-e BRIDGE_SUPABASE_URL=…` still wins over the ldflag.
+# Bridge Music Supabase project + hCaptcha site key + AcoustID app
+# key — baked into the binary at link time (NOT exported to ENV) so
+# end-users running this image in Portainer / Docker don't see them
+# listed as configurable knobs alongside their real config. None of
+# these values is a secret; they're public identifiers that already
+# ship in the iOS app bundle, the Marketplace web client, or are
+# explicitly designed (in AcoustID's case) to be visible per-app.
+# Operators forking the image for a different Supabase project pass
+# --build-arg at build time; runtime `-e BRIDGE_SUPABASE_URL=…` still
+# wins over the ldflag.
 ARG BRIDGE_SUPABASE_URL_DEFAULT=https://ryddlkjlpxtdrdvggipo.supabase.co
 ARG BRIDGE_SUPABASE_ANON_KEY_DEFAULT=sb_publishable_Wl562UROunrQI0XIqlb8cQ_efLR70Oe
 ARG BRIDGE_HCAPTCHA_SITE_KEY_DEFAULT=1dcef6cc-d22a-4f90-a882-c118b318f8f8
@@ -37,13 +39,22 @@ ARG BRIDGE_HCAPTCHA_SITE_KEY_DEFAULT=1dcef6cc-d22a-4f90-a882-c118b318f8f8
 # marketplace deployment (e.g. https://bridgemusic.app once that's
 # the canonical site).
 ARG BRIDGE_MARKETPLACE_URL_DEFAULT=https://market.bykobejean.com
+# AcoustID web-service key powering the "identify with MusicBrainz"
+# metadata flow. AcoustID app keys are public identifiers — the free
+# tier's 3 req/sec quota is per-key and is shared across every
+# install of an image built with the same baked-in value. Identify
+# is a manual user-initiated action, so sharing the quota is fine.
+# Operators who want their own quota override at runtime with
+# `-e BRIDGE_ACOUSTID_KEY=…`; the runtime env wins.
+ARG BRIDGE_ACOUSTID_KEY_DEFAULT=pwywUn9OAX
 
 RUN CGO_ENABLED=0 go build \
     -ldflags="-s -w \
         -X github.com/bridgemusic/bridge-server/internal/config.BridgeSupabaseURL=${BRIDGE_SUPABASE_URL_DEFAULT} \
         -X github.com/bridgemusic/bridge-server/internal/config.BridgeSupabaseAnonKey=${BRIDGE_SUPABASE_ANON_KEY_DEFAULT} \
         -X github.com/bridgemusic/bridge-server/internal/config.BridgeHCaptchaSiteKey=${BRIDGE_HCAPTCHA_SITE_KEY_DEFAULT} \
-        -X github.com/bridgemusic/bridge-server/internal/config.BridgeMarketplaceURL=${BRIDGE_MARKETPLACE_URL_DEFAULT}" \
+        -X github.com/bridgemusic/bridge-server/internal/config.BridgeMarketplaceURL=${BRIDGE_MARKETPLACE_URL_DEFAULT} \
+        -X github.com/bridgemusic/bridge-server/internal/config.BridgeAcoustIDKey=${BRIDGE_ACOUSTID_KEY_DEFAULT}" \
     -o /out/bridge-server ./cmd/bridge-server
 
 # --- Stage 4: runtime ------------------------------------------------
