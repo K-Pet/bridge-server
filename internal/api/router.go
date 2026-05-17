@@ -89,6 +89,7 @@ func NewRouter(
 		authed.HandleFunc("GET /api/library/import/sessions/{id}", handleGetImportSession(importMgr))
 		authed.HandleFunc("POST /api/library/import/sessions/{id}/uploads", handleBeginUpload(importMgr))
 		authed.HandleFunc("PUT /api/library/import/sessions/{id}/uploads/{uploadId}", handleWriteChunk(importMgr))
+		authed.HandleFunc("GET /api/library/import/sessions/{id}/uploads/{uploadId}", handleGetUploadStatus(importMgr))
 		authed.HandleFunc("POST /api/library/import/sessions/{id}/uploads/{uploadId}/finalize", handleFinalizeUpload(importMgr))
 		authed.HandleFunc("DELETE /api/library/import/sessions/{id}/uploads/{uploadId}", handleAbortUpload(importMgr))
 		authed.HandleFunc("POST /api/library/import/sessions/{id}/items/{itemId}/skip", handleSkipImportItem(importMgr))

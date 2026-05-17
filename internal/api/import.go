@@ -228,6 +228,34 @@ func handleFinalizeUpload(mgr *library.Manager) http.HandlerFunc {
 	}
 }
 
+// handleGetUploadStatus reports the server's view of a pending
+// upload's progress. The client calls this after a chunk fails (or
+// when a 409 ErrChunkOutOfOrder comes back) to learn where to resume
+// from — the response is authoritative regardless of what the client
+// thinks it sent.
+func handleGetUploadStatus(mgr *library.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := auth.UserID(r.Context())
+		if userID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		sessionID := r.PathValue("id")
+		uploadID := r.PathValue("uploadId")
+		bytesWritten, size, err := mgr.UploadStatus(userID, sessionID, uploadID)
+		if err != nil {
+			writeJSONError(w, http.StatusNotFound, "not_found", "Upload not found.")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"upload_id":     uploadID,
+			"bytes_written": bytesWritten,
+			"size":          size,
+		})
+	}
+}
+
 func handleAbortUpload(mgr *library.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID := auth.UserID(r.Context())

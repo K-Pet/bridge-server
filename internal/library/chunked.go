@@ -12,15 +12,19 @@ import (
 )
 
 // DefaultChunkSize is what the server advertises to clients via
-// BeginUpload. Picked well below Cloudflare's 100 MiB free-plan body
-// cap and under typical reverse-proxy default body limits — every
-// chunk is a fresh, short-lived request, dodging both the size cap
-// and any long-stream timeout.
+// BeginUpload. Picked small enough that:
+//   - a single chunk fits well under Cloudflare's 100 MiB free-plan
+//     body cap (with vast headroom) and any reverse-proxy default,
+//   - one chunk's transmit time stays under Cloudflare's 100 s edge
+//     timeout even on a 1-3 Mbit/s uplink,
+//   - one chunk's write time on slow SD-card-backed deployments
+//     (Pi Zero 2W, ARM SBCs) is short enough that a transient blip
+//     loses at most a few seconds of progress instead of half a minute.
 //
-// Clients are free to send smaller chunks; the server doesn't care
-// about the exact boundary. Larger chunks risk hitting the proxy
-// limits this whole flow exists to avoid.
-const DefaultChunkSize = 16 * 1024 * 1024 // 16 MiB
+// 4 MiB hits all three. Clients are free to send smaller chunks; the
+// server doesn't care about the exact boundary. Larger chunks risk
+// hitting the timeouts this whole flow exists to avoid.
+const DefaultChunkSize = 4 * 1024 * 1024 // 4 MiB
 
 // pendingUpload tracks a single chunked-upload in flight. Each WriteChunk
 // call appends to the staging file at the next expected offset; a
@@ -134,6 +138,14 @@ var ErrChunkOutOfOrder = errors.New("chunk out of order")
 // Returns the new total bytes written and complete=true once the file
 // is fully assembled. complete=false plus a nil error means more
 // chunks are expected.
+//
+// Crash/partial-write safety: on any I/O error mid-chunk we truncate
+// the staging file back to p.written and seek the cursor there.
+// Without this, the file cursor would sit past p.written (where
+// io.Copy left it after its partial write), and the NEXT chunk would
+// be written from that wrong cursor position — silently corrupting
+// the file with a gap of garbage where the failed bytes had been.
+// Truncate + Seek ensures the file always exactly matches p.written.
 func (m *Manager) WriteChunk(userID, sessionID, uploadID string, offset, total, chunkLen int64, body io.Reader) (written int64, complete bool, err error) {
 	p, err := m.lookupUpload(userID, sessionID, uploadID)
 	if err != nil {
@@ -153,19 +165,53 @@ func (m *Manager) WriteChunk(userID, sessionID, uploadID string, offset, total, 
 		return p.written, false, fmt.Errorf("chunk would exceed declared size")
 	}
 
+	// Belt-and-suspenders: explicitly position the file cursor at
+	// p.written before writing. The previous chunk's WriteChunk left
+	// the cursor at p.written on success, but a prior partial-write
+	// failure recovered via Truncate may have left a stale position
+	// behind, and any future code path that handles the file
+	// out-of-band would also benefit from this being explicit.
+	if _, err := p.file.Seek(p.written, io.SeekStart); err != nil {
+		return p.written, false, fmt.Errorf("seek staging file: %w", err)
+	}
+
 	// Read at most chunkLen+1 bytes so an oversized body fails fast
 	// (and we never write past the declared size into staging).
 	n, err := io.Copy(p.file, io.LimitReader(body, chunkLen+1))
-	if err != nil {
-		return p.written + n, false, fmt.Errorf("write chunk: %w", err)
-	}
-	if n != chunkLen {
-		return p.written + n, false, fmt.Errorf("chunk length mismatch: header said %d, body had %d", chunkLen, n)
+	if err != nil || n != chunkLen {
+		// Roll the staging file back to a clean state matching
+		// p.written so a retry of this chunk can write at the right
+		// offset without leaving a garbage hole. Best-effort: if
+		// truncate/seek themselves fail, the upload is unrecoverable
+		// anyway (and the error returned to the client carries the
+		// original cause).
+		_ = p.file.Truncate(p.written)
+		_, _ = p.file.Seek(p.written, io.SeekStart)
+		if err != nil {
+			return p.written, false, fmt.Errorf("write chunk: %w", err)
+		}
+		return p.written, false, fmt.Errorf("chunk length mismatch: header said %d, body had %d", chunkLen, n)
 	}
 
 	p.written += n
 	p.updated = time.Now()
 	return p.written, p.written == p.size, nil
+}
+
+// UploadStatus reports how many bytes the server has already accepted
+// for a pending upload, plus the total size declared at BeginUpload.
+// Clients use this to recover from response-loss races where the
+// server got a chunk but the 2xx response didn't reach the client:
+// the next attempt will get a 409 (offset mismatch), the client GETs
+// status, and resumes from the server's bytes_written.
+func (m *Manager) UploadStatus(userID, sessionID, uploadID string) (bytesWritten, size int64, err error) {
+	p, err := m.lookupUpload(userID, sessionID, uploadID)
+	if err != nil {
+		return 0, 0, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.written, p.size, nil
 }
 
 // FinalizeUpload closes the staging file, parses tags, plans the

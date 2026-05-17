@@ -320,7 +320,14 @@ func (m *Manager) Commit(userID, sessionID string, allowOverwrite bool) (*Commit
 	items := append([]*Item(nil), s.Items...) // snapshot
 	m.mu.Unlock()
 
-	res := &CommitResult{}
+	// Initialize slices as empty (not nil) so the JSON response always
+	// has [] instead of null — keeps the client contract predictable
+	// when a category has no entries.
+	res := &CommitResult{
+		Committed: []string{},
+		Skipped:   []string{},
+		Failed:    []string{},
+	}
 	for _, it := range items {
 		// Items added to the session are either Staged (commit) or
 		// Conflict (commit only on overwrite); Skipped items skip; the

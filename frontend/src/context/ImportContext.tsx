@@ -22,8 +22,8 @@ import {
   useRef, useState, type ReactNode,
 } from 'react'
 import {
-  abortImportSession, commitImportSession, createImportSession,
-  skipImportItem, uploadImportFile,
+  abortImportSession, abortImportUpload, commitImportSession, createImportSession,
+  resumeImportFile, skipImportItem, uploadImportFile, UploadFailedError,
   type CommitResult, type ImportItem, type ImportSession,
 } from '../lib/importApi'
 
@@ -48,6 +48,11 @@ export interface QueuedFile {
   bytesUploaded: number
   error?: string
   serverItem?: ImportItem
+  // uploadID is the server-assigned id for the in-flight chunked
+  // upload. Captured once BeginUpload returns and preserved across
+  // chunk failures so retry() can resume from the server's offset
+  // rather than starting from byte 0.
+  uploadID?: string
 }
 
 export interface ImportProgress {
@@ -69,6 +74,8 @@ interface ImportContextValue {
   busy: boolean             // true while session is being created/committed/aborted
   enqueue(files: FileList | File[]): Promise<void>
   removeFile(localId: string): Promise<void>
+  retry(localId: string): void
+  retryAll(): void
   commit(allowOverwrite: boolean): Promise<CommitResult>
   abort(): Promise<void>
 }
@@ -190,18 +197,54 @@ export function ImportProvider({ children }: { children: ReactNode }) {
   // startUpload kicks one file's upload and wires its lifecycle into
   // the queue state. Bumps inFlight on entry, decrements on exit, and
   // re-pumps the queue once the slot is free.
+  //
+  // When the QueuedFile already has an uploadID (a retry after a hard
+  // failure), we resume against the existing server-side staging file
+  // rather than starting a fresh upload — saves re-transmitting bytes
+  // the server has already accepted.
   const startUpload = useCallback((qf: QueuedFile, sessionId: string) => {
     const controller = new AbortController()
     abortControllers.current.set(qf.localId, controller)
     inFlightRef.current += 1
-    updateFile(qf.localId, { status: 'uploading', progress: 0, bytesUploaded: 0 })
+    // Preserve uploadID across the status reset so a retry that
+    // fails immediately doesn't accidentally lose its resume anchor.
+    updateFile(qf.localId, {
+      status: 'uploading',
+      progress: 0,
+      bytesUploaded: 0,
+      error: undefined,
+    })
 
-    uploadImportFile(sessionId, qf.file, {
+    const cb = {
       signal: controller.signal,
-      onProgress: (percent, bytes) => {
+      onProgress: (percent: number, bytes: number) => {
         queueProgress(qf.localId, percent, bytes)
       },
-    })
+      onUploadID: (uploadID: string) => {
+        // Stash the id the moment we have it so any subsequent
+        // failure (mid-chunk) still leaves a retry path.
+        updateFile(qf.localId, { uploadID })
+      },
+    }
+
+    // If we have an existing uploadID, try to resume. If the server
+    // has reaped it (404 from /status), fall back to a fresh upload.
+    const promise = qf.uploadID
+      ? resumeImportFile(sessionId, qf.uploadID, qf.file, cb).catch(async (err) => {
+          // Resume failed because the server forgot the upload —
+          // start fresh.
+          const msg = err instanceof Error ? err.message : String(err)
+          if (msg.includes('404') || msg.includes('not found') || msg.includes('size mismatch')) {
+            // Clear the stale uploadID so onUploadID can install the
+            // fresh one without colliding.
+            updateFile(qf.localId, { uploadID: undefined })
+            return uploadImportFile(sessionId, qf.file, cb)
+          }
+          throw err
+        })
+      : uploadImportFile(sessionId, qf.file, cb)
+
+    promise
       .then((item) => {
         updateFile(qf.localId, {
           status: 'uploaded',
@@ -214,7 +257,16 @@ export function ImportProvider({ children }: { children: ReactNode }) {
         if (err instanceof DOMException && err.name === 'AbortError') {
           updateFile(qf.localId, { status: 'cancelled', error: 'cancelled' })
         } else {
-          updateFile(qf.localId, { status: 'error', error: (err as Error).message })
+          // Carry the uploadID forward (already on the QueuedFile via
+          // onUploadID or via the UploadFailedError) so retry() can
+          // resume. If the underlying error was a UploadFailedError we
+          // know exactly which upload to resume.
+          const uploadID = err instanceof UploadFailedError ? err.uploadID : undefined
+          updateFile(qf.localId, {
+            status: 'error',
+            error: (err as Error).message,
+            ...(uploadID ? { uploadID } : {}),
+          })
         }
       })
       .finally(() => {
@@ -268,16 +320,24 @@ export function ImportProvider({ children }: { children: ReactNode }) {
     if (!target) return
 
     // In-flight or pending: abort the upload and just drop the row.
-    // Server never sees the file (or sees a half-written staging file
-    // the janitor will reap with the session).
     const controller = abortControllers.current.get(localId)
     if (controller) controller.abort()
 
+    // If the upload had reached the server (got an uploadID) but
+    // hadn't finalized — including the "error with retry available"
+    // case — explicitly tell the server to drop its staged bytes.
+    // The upload-failure path no longer auto-deletes (so retry can
+    // resume), which means removal has to actively clean up.
+    const sess = sessionRef.current
+    if (sess && target.uploadID && !target.serverItem) {
+      abortImportUpload(sess.id, target.uploadID).catch(() => {})
+    }
+
     // Already uploaded: tell the server to skip it on commit, then
     // drop the row from the local queue so the review screen forgets it.
-    if (target.status === 'uploaded' && target.serverItem && sessionRef.current) {
+    if (target.status === 'uploaded' && target.serverItem && sess) {
       try {
-        await skipImportItem(sessionRef.current.id, target.serverItem.id)
+        await skipImportItem(sess.id, target.serverItem.id)
       } catch {
         // Skip is best-effort — if it fails the server will still
         // honor the commit's allow_overwrite=false default and the
@@ -287,6 +347,34 @@ export function ImportProvider({ children }: { children: ReactNode }) {
 
     writeFiles((prev) => prev.filter(f => f.localId !== localId))
   }, [writeFiles])
+
+  // retry resets a failed/cancelled file back to pending and kicks
+  // the queue. The QueuedFile's uploadID (if any) is preserved so
+  // startUpload picks the resume path automatically.
+  const retry = useCallback((localId: string) => {
+    const target = filesRef.current.find(f => f.localId === localId)
+    if (!target) return
+    if (target.status !== 'error' && target.status !== 'cancelled') return
+    writeFiles((prev) => prev.map(f => f.localId === localId
+      ? { ...f, status: 'pending', progress: 0, bytesUploaded: 0, error: undefined }
+      : f,
+    ))
+    void pumpQueue()
+  }, [writeFiles, pumpQueue])
+
+  // retryAll re-queues every failed/cancelled file. Order is
+  // preserved; UPLOAD_CONCURRENCY governs how many run at once.
+  const retryAll = useCallback(() => {
+    let touched = false
+    writeFiles((prev) => prev.map(f => {
+      if (f.status === 'error' || f.status === 'cancelled') {
+        touched = true
+        return { ...f, status: 'pending', progress: 0, bytesUploaded: 0, error: undefined }
+      }
+      return f
+    }))
+    if (touched) void pumpQueue()
+  }, [writeFiles, pumpQueue])
 
   // resetLocalState wipes the in-memory queue/session/timers. Shared
   // by commit and abort so a late-arriving progress flush after either
@@ -383,6 +471,8 @@ export function ImportProvider({ children }: { children: ReactNode }) {
     busy,
     enqueue,
     removeFile,
+    retry,
+    retryAll,
     commit,
     abort,
   }
